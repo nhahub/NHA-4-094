@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/agents/
+Folder: backend/app/ai_system/agents/
 
 Description:
 This folder defines all AI agents used in the system.
@@ -13,5 +13,6 @@ Responsibilities:
 
 Integration:
 Agents are invoked by the orchestrator and may call services (LLM, retrieval,
-tools) from ai-system/services/. The nodes/ subfolder contains atomic graph
+tools) from ai_system/services/. The nodes/ subfolder contains atomic graph
 nodes used in LangGraph or similar frameworks for workflow composition.
+

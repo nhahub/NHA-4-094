@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/config/
+Folder: backend/app/ai_system/config/
 
 Description:
 This folder stores all static configuration files and constants specific
@@ -15,3 +15,4 @@ Integration:
 Read by all AI modules (agents, pipelines, services) at initialization.
 Works alongside app/core/ which handles environment variable loading.
 The prompts/ subfolder stores all prompt templates consumed by services/llm/.
+

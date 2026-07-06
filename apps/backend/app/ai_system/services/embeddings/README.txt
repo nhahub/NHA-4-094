@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/services/embeddings/
+Folder: backend/app/ai_system/services/embeddings/
 
 Description:
 This folder provides the embedding generation service responsible for converting
@@ -15,3 +15,4 @@ Integration:
 Called by the ingestion/ service to embed document chunks before storage,
 and by the retrieval/ service to embed user queries at query time.
 Embeddings are stored in the vector database managed through app/db/.
+

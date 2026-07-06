@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/services/tools/
+Folder: backend/app/ai_system/services/tools/
 
 Description:
 This folder defines the custom tools and function-calling implementations
@@ -12,7 +12,8 @@ Responsibilities:
 - Handle tool execution errors and format results for agent consumption
 
 Integration:
-Tools are registered with agents in ai-system/agents/ and invoked during
+Tools are registered with agents in ai_system/agents/ and invoked during
 agent reasoning loops. They may call external APIs, query app/db/, or trigger
 background tasks in app/workers/. Results are fed back into the agent context
 for continued reasoning.
+

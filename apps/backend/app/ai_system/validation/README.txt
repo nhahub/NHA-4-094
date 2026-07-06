@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/validation/
+Folder: backend/app/ai_system/validation/
 
 Description:
 This folder contains input and output validation logic specific to the AI system.
@@ -15,3 +15,4 @@ Integration:
 Validation is applied at pipeline entry points and after LLM generation.
 Works alongside guardrails/ (for policy enforcement) and schemas/ (for data models).
 Ensures that context and memory modules only receive clean, well-formed data.
+

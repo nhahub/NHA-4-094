@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/context/
+Folder: backend/app/ai_system/context/
 
 Description:
 This folder manages the active runtime context passed between components
@@ -13,6 +13,7 @@ Responsibilities:
 
 Integration:
 Context is populated from retrieval results (services/retrieval/),
-user session data (app/db/), and memory (ai-system/memory/).
+user session data (app/db/), and memory (ai_system/memory/).
 It is passed into agents and pipelines during execution and is consumed
 by the LLM service (services/llm/) during prompt construction.
+

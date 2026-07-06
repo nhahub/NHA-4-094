@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/services/ingestion/
+Folder: backend/app/ai_system/ingestion/
 
 Description:
 This folder handles the document ingestion pipeline — the process of loading,
@@ -15,3 +15,4 @@ Integration:
 Ingestion is typically triggered by background workers (app/workers/) or
 directly via API upload endpoints. Processed chunks are passed to the
 embeddings/ service for vectorization and then stored via app/db/.
+

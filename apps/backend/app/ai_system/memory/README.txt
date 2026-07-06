@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/memory/
+Folder: backend/app/ai_system/memory/
 
 Description:
 This folder handles persistent and short-term memory for the AI system.
@@ -14,5 +14,6 @@ Responsibilities:
 Integration:
 Memory is read at the start of each request to reconstruct session context
 and written at the end to persist relevant information. It connects with
-ai-system/context/ for runtime enrichment, and with app/db/ for durable storage.
+ai_system/context/ for runtime enrichment, and with app/db/ for durable storage.
 Agents and pipelines read from memory via the context module.
+

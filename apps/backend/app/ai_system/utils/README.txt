@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/utils/
+Folder: backend/app/ai_system/utils/
 
 Description:
 This folder provides shared utility functions and helper classes used
@@ -12,6 +12,7 @@ Responsibilities:
 - Supply logging helpers and performance timing wrappers
 
 Integration:
-Imported by any module within ai-system/ that requires shared logic.
-Utils are strictly stateless and have no dependencies on other ai-system
+Imported by any module within ai_system/ that requires shared logic.
+Utils are strictly stateless and have no dependencies on other ai_system
 components, making them safe to import without circular dependency risk.
+

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Study Platform - PDF Chat</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Panel for Documents & Tools -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>AI Study Platform</h2>
+                <p class="subtitle">PDF Retrieval & Chat</p>
+            </div>
+
+            <!-- Upload Zone -->
+            <section class="upload-section">
+                <h3>1. Select PDF Document</h3>
+                <div class="upload-box" id="upload-box">
+                    <input type="file" id="file-input" accept=".pdf" style="display: none;">
+                    <label for="file-input" class="file-label">
+                        <span class="icon">📁</span>
+                        <span id="file-select-text">Choose a PDF file</span>
+                    </label>
+                </div>
+                <button id="upload-btn" disabled>Upload PDF</button>
+            </section>
+
+            <!-- Status Zone -->
+            <section class="status-section">
+                <h3>Document Status</h3>
+                <div class="status-card">
+                    <p><strong>File Name:</strong> <span id="doc-name-display">No file loaded</span></p>
+                    <p><strong>Status:</strong> <span id="doc-status-display" class="status-badge status-idle">IDLE</span></p>
+                    <div id="doc-stats" style="display: none;">
+                        <p><strong>Pages:</strong> <span id="doc-pages">0</span></p>
+                        <p><strong>Chunks:</strong> <span id="doc-chunks">0</span></p>
+                    </div>
+                    <p id="doc-duration-container" style="display: none;"><strong>Duration:</strong> <span id="doc-duration">0s</span></p>
+                    <p id="doc-error-display" class="error-text" style="display: none;"></p>
+                </div>
+            </section>
+
+            <!-- Extra Tools (Disabled until Ready) -->
+            <section class="tools-section">
+                <h3>Document Tools</h3>
+                <button id="summary-btn" class="tool-btn" disabled>Summarize PDF</button>
+                <button id="quiz-btn" class="tool-btn" disabled>Generate Quiz</button>
+            </section>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-container">
+            <!-- Chat Header / Title -->
+            <header class="chat-header">
+                <div class="doc-header-info">
+                    <span class="header-icon">💬</span>
+                    <span id="chat-header-title">PDF Chat Session</span>
+                </div>
+                <!-- Controls for Chat Settings -->
+                <div class="chat-settings">
+                    <label for="lang-select">Language:</label>
+                    <select id="lang-select">
+                        <option value="ar" selected>العربية (Arabic)</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+            </header>
+
+            <!-- Messages Area -->
+            <div class="messages-area" id="messages-area">
+                <div class="welcome-message">
+                    <div class="welcome-icon">🎓</div>
+                    <h3>Welcome to the AI Study Platform!</h3>
+                    <p>To begin, select and upload a PDF document from the left panel.</p>
+                    <p>Once the document status is <strong>READY</strong>, the chat will unlock and you can ask questions directly related to the PDF content.</p>
+                </div>
+            </div>
+
+            <!-- Input Form -->
+            <form id="chat-form" class="chat-form">
+                <input type="text" id="chat-input" placeholder="Upload a PDF and wait for it to be ready..." disabled required autocomplete="off">
+                <button type="submit" id="send-btn" disabled>Send</button>
+            </form>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

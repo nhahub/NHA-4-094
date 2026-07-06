@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/orchestrator/
+Folder: backend/app/ai_system/orchestrator/
 
 Description:
 This folder contains the central orchestration logic of the AI system.
@@ -16,3 +16,4 @@ Acts as the brain connecting API requests to the AI execution layer.
 Works closely with agents/, pipelines/, context/, and memory/ modules.
 The orchestrator is typically implemented as a LangGraph state machine or
 a custom async task router.
+

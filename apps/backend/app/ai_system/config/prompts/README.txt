@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/config/prompts/
+Folder: backend/app/ai_system/config/prompts/
 
 Description:
 This folder stores all prompt templates used throughout the AI system.
@@ -15,3 +15,4 @@ Integration:
 Prompt templates are loaded and rendered by services/llm/ during inference.
 The orchestrator and agents reference specific prompt files based on
 task type. Prompt changes here directly affect LLM output quality and behavior.
+

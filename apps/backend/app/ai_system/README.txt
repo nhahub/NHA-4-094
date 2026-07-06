@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/
+Folder: backend/app/ai_system/
 
 Description:
 This is the core intelligence layer of the entire backend platform.
@@ -15,3 +15,4 @@ Integration:
 Receives requests from the API layer (app/api/) and interacts with the
 database layer (app/db/) for persistent storage. Context and memory modules
 feed enriched state into agents and pipelines at runtime.
+

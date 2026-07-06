@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/services/
+Folder: backend/app/ai_system/services/
 
 Description:
 This folder provides all low-level AI service implementations used across
@@ -22,3 +22,4 @@ Subfolders:
 Integration:
 Services are consumed by agents and pipelines. They interface with external
 providers (OpenAI, Pinecone, etc.) and internal modules like context/ and memory/.
+

@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/services/retrieval/
+Folder: backend/app/ai_system/services/retrieval/
 
 Description:
 This folder implements the retrieval service that fetches the most relevant
@@ -14,5 +14,6 @@ Responsibilities:
 Integration:
 Queried by pipelines and agents after receiving a user request.
 Uses the embeddings/ service to vectorize the query before search.
-Retrieved chunks are passed into ai-system/context/ to build the LLM prompt
+Retrieved chunks are passed into ai_system/context/ to build the LLM prompt
 and are cited in the final response returned via app/api/.
+

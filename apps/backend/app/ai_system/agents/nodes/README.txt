@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/agents/nodes/
+Folder: backend/app/ai_system/agents/nodes/
 
 Description:
 This folder contains the individual graph node implementations used to build
@@ -13,5 +13,6 @@ Responsibilities:
 
 Integration:
 Nodes are assembled by agent definitions in agents/ into directed graphs.
-They call into ai-system/services/ for LLM inference, retrieval, and tool use.
-State passed between nodes is enriched by ai-system/context/ and ai-system/memory/.
+They call into ai_system/services/ for LLM inference, retrieval, and tool use.
+State passed between nodes is enriched by ai_system/context/ and ai_system/memory/.
+

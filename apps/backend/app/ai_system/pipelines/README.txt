@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/pipelines/
+Folder: backend/app/ai_system/pipelines/
 
 Description:
 This folder contains end-to-end AI pipeline definitions.
@@ -13,5 +13,6 @@ Responsibilities:
 
 Integration:
 Pipelines are registered in the orchestrator and select the appropriate
-services from ai-system/services/. They pull context from ai-system/context/
-and persist results via ai-system/memory/ or app/db/.
+services from ai_system/services/. They pull context from ai_system/context/
+and persist results via ai_system/memory/ or app/db/.
+

@@ -1,4 +1,4 @@
-Folder: backend/app/ai-system/services/guardrails/
+Folder: backend/app/ai_system/services/guardrails/
 
 Description:
 This folder implements the safety and policy enforcement layer of the AI system.
@@ -14,4 +14,5 @@ Responsibilities:
 Integration:
 Applied as a pre-processing step before inputs reach the AI pipeline and as a
 post-processing step on LLM outputs before they are returned via app/api/.
-Works alongside ai-system/validation/ which handles schema and format checks.
+Works alongside ai_system/validation/ which handles schema and format checks.
+
