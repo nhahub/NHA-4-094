@@ -94,7 +94,7 @@ class TaskOrchestrator:
         else:
             raise ExecutionError(f"Unsupported execution mode: {plan.execution_mode}")
 
-        return self._merge_results(task_results, plan.execution_mode)
+        return self._merge_results(task_results, plan)
 
     async def _execute_task(self, task: Task, request: Any, previous_results: Optional[Dict[str, TaskResult]] = None) -> TaskResult:
         """Executes a single task by routing it to its registered pipeline wrapper."""
@@ -131,27 +131,91 @@ class TaskOrchestrator:
                 metadata={"mock": True}
             )
 
-    def _merge_results(self, task_results: Dict[str, TaskResult], mode: str) -> AIResponse:
+    def _construct_pipeline_trace(self, plan: ExecutionPlan, task_results: Dict[str, TaskResult]) -> Dict[str, Any]:
+        results_list = list(task_results.values())
+        
+        # 1. Planner Trace
+        intents = [t.type for t in plan.tasks]
+        planner_trace = {
+            "status": "completed",
+            "mode": "rule_based",
+            "llm_used": False,
+            "intent": ", ".join(intents) if intents else "unknown",
+            "execution_mode": plan.execution_mode,
+            "tasks": [
+                {
+                    "task_id": t.task_id,
+                    "type": t.type,
+                    "query": t.query,
+                    "depends_on": t.depends_on
+                } for t in plan.tasks
+            ],
+            "confidence": 0.0  # Do not show fake confidence values
+        }
+
+        # 2. Orchestrator Trace
+        orchestrator_trace = {
+            "status": "routed_only",
+            "selected_execution_mode": plan.execution_mode,
+            "selected_pipeline_names": [t.type for t in plan.tasks],
+            "dag_mode": "not_used",
+            "parallel_sequential_hybrid_status": "sequential" if plan.execution_mode == "single" else plan.execution_mode,
+            "launched_task_names": [t.type for t in plan.tasks],
+            "retrieval_status": "not_run",
+            "verifier_status": "not_run",
+            "fallback_used": False
+        }
+
+        # 3. Memory Trace
+        profile_level = "beginner"
+        retrieved_memory_count = 0
+        personalization_applied = False
+
+        # Find first task result that has memory_info
+        for tr in results_list:
+            if tr.metadata and "memory_info" in tr.metadata:
+                mem_info = tr.metadata["memory_info"]
+                profile_level = mem_info.get("academic_level", "beginner")
+                # Retrieve retrieved_memory_count safely
+                retrieved_memory_count = mem_info.get("retrieved_memory_count", 0)
+                personalization_applied = mem_info.get("has_personalization", False)
+                break
+
+        memory_trace = {
+            "memory_layer_checked": True,
+            "retrieved_count": retrieved_memory_count,
+            "profile_level": profile_level,
+            "personalization_applied": personalization_applied
+        }
+
+        return {
+            "planner": planner_trace,
+            "orchestrator": orchestrator_trace,
+            "memory": memory_trace
+        }
+
+    def _merge_results(self, task_results: Dict[str, TaskResult], plan: ExecutionPlan) -> AIResponse:
         """Merges multiple TaskResult outputs into one consolidated AIResponse."""
         results_list = list(task_results.values())
+        trace = self._construct_pipeline_trace(plan, task_results)
         
         # 1. Check for "all no_answer"
         all_no_answer = all(r.status == "no_answer" for r in results_list)
         if all_no_answer:
             return AIResponse(
                 status="no_answer",
-                message=NO_ANSWER_FALLBACK,
-                execution_mode=mode,
+                message="الإجابة النهائية غير متاحة حاليًا لأن مرحلة Executor / LLM / RAG لم تكتمل بعد. المعروض الآن هو مخرجات Planner و Orchestrator و Memory فقط.",
+                execution_mode=plan.execution_mode,
                 tasks=results_list,
                 citations=[],
                 confidence=0.0,
-                metadata={"mock": True}
+                metadata={"mock": True},
+                pipeline_trace=trace
             )
 
         # 2. Check for "all failed"
         all_failed = all(r.status == "failed" for r in results_list)
         if all_failed:
-            # Unexpected internal errors raise AllTasksFailedError to return HTTP 500
             raise AllTasksFailedError("ALL_TASKS_FAILED")
 
         # 3. Consolidate statuses
@@ -163,47 +227,13 @@ class TaskOrchestrator:
         else:
             response_status = "success"
 
-        # 4. Merge content messages into formatted markdown
-        message_parts = []
-        for r in results_list:
-            if r.status == "success":
-                # Capitalize task header for clean markdown layout
-                header = r.type.replace("_", " ").title()
-                message_parts.append(f"### {header}\n{r.content}")
-            elif r.status == "no_answer":
-                header = r.type.replace("_", " ").title()
-                message_parts.append(f"### {header}\n*{NO_ANSWER_FALLBACK}*")
-            elif r.status == "failed":
-                header = r.type.replace("_", " ").title()
-                message_parts.append(f"### {header}\n*Error executing task: {r.error}*")
-
-        merged_message = "\n\n".join(message_parts)
-
-        # 5. Aggregate Citations and deduplicate by chunk_id
-        citations_map: Dict[str, Citation] = {}
-        for r in results_list:
-            for cit in r.citations:
-                if cit.chunk_id not in citations_map:
-                    citations_map[cit.chunk_id] = cit
-                else:
-                    # Update score if existing has lower score
-                    existing_score = citations_map[cit.chunk_id].score or 0.0
-                    new_score = cit.score or 0.0
-                    if new_score > existing_score:
-                        citations_map[cit.chunk_id].score = new_score
-        
-        merged_citations = list(citations_map.values())
-
-        # 6. Calculate average confidence across successful/no_answer tasks (non-failed)
-        valid_confidences = [r.confidence for r in results_list if r.status != "failed"]
-        avg_confidence = sum(valid_confidences) / len(valid_confidences) if valid_confidences else 0.0
-
         return AIResponse(
             status=response_status,
-            message=merged_message,
-            execution_mode=mode,
+            message="الإجابة النهائية غير متاحة حاليًا لأن مرحلة Executor / LLM / RAG لم تكتمل بعد. المعروض الآن هو مخرجات Planner و Orchestrator و Memory فقط.",
+            execution_mode=plan.execution_mode,
             tasks=results_list,
-            citations=merged_citations,
-            confidence=avg_confidence,
-            metadata={"mock": True}
+            citations=[],
+            confidence=0.0,
+            metadata={"mock": True},
+            pipeline_trace=trace
         )

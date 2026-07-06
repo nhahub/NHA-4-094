@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.documents import router as documents_router
 from app.api.v1.ai import router as ai_router
 
@@ -7,6 +8,15 @@ app = FastAPI(
     title="NHA-4-094 AI Study Platform Ingestion API",
     description="Core backend service for uploading, parsing, chunking, and embedding educational PDFs for RAG retrieval.",
     version="1.0.0"
+)
+
+# Enable CORS (Cross-Origin Resource Sharing)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for local development
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 # Register API endpoints under prefix /api/v1

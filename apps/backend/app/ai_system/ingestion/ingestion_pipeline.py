@@ -88,7 +88,7 @@ async def process_document(document_id: str) -> None:
         # Step 7: Update status to embedding, generate vectors
         await document_repository.update_status(document_id, "embedding")
         
-        print(f"[PIPELINE] [4/5] Computing embeddings using model '{settings.EMBEDDING_MODEL_NAME}' (384 dimensions)...")
+        print(f"[PIPELINE] [4/5] Computing embeddings using model '{settings.EMBEDDING_MODEL_NAME}' ({settings.EMBEDDING_DIMENSIONS} dimensions)...")
         chunk_contents = [c["content"] for c in chunks]
         embeddings = embed_texts(chunk_contents)
         print(f"[PIPELINE] Generated {len(embeddings)} embedding vectors.")

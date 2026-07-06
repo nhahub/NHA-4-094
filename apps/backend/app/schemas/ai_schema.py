@@ -9,6 +9,7 @@ class PDFChatRequest(BaseModel):
     language: str = Field("ar", description="Language of response. Supported values: 'ar', 'en'.")
     user_level: str = Field("intermediate", description="Target educational level.")
     request_source: str = Field("chat", description="Origin of request (e.g., 'chat', 'summary_button', 'quiz_button').")
+    document_id: Optional[str] = Field(None, description="The PDF document ID bound to the search.")
 
     @field_validator("language")
     @classmethod
@@ -24,6 +25,7 @@ class SummaryRequest(BaseModel):
     language: str = Field("ar", description="Language of response. Supported values: 'ar', 'en'.")
     user_level: str = Field("intermediate", description="Target educational level.")
     summary_style: Optional[str] = Field(None, description="Style of summary (e.g., 'bullet_points', 'paragraph').")
+    document_id: Optional[str] = Field(None, description="The PDF document ID bound to the summary.")
 
     @field_validator("language")
     @classmethod
@@ -41,6 +43,7 @@ class QuizRequest(BaseModel):
     difficulty: Optional[str] = Field("medium", description="Difficulty level: 'easy', 'medium', 'hard'.")
     number_of_questions: Optional[int] = Field(5, description="Number of questions (1-20).")
     question_type: Optional[str] = Field("multiple_choice", description="Question format: 'multiple_choice', 'true_false', 'short_answer', 'mixed'.")
+    document_id: Optional[str] = Field(None, description="The PDF document ID bound to the quiz.")
 
     @field_validator("language")
     @classmethod
@@ -109,3 +112,4 @@ class AIResponse(BaseModel):
     confidence: float
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    pipeline_trace: Optional[Dict[str, Any]] = None

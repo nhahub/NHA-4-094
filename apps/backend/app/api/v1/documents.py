@@ -77,10 +77,24 @@ async def get_document_status(
             detail="Permission denied to access this document's status."
         )
         
+    from datetime import datetime, timezone
+    
+    processing_time_seconds = doc.get("processing_time_seconds")
+    created_at_str = doc.get("created_at")
+    
+    if processing_time_seconds is None and created_at_str:
+        try:
+            created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            processing_time_seconds = round((now - created_at).total_seconds(), 2)
+        except Exception as e:
+            logger.error(f"Error calculating document processing time: {e}")
+            
     return StatusResponse(
         document_id=doc["id"],
         status=doc["upload_status"],
         page_count=doc.get("page_count"),
         chunk_count=doc.get("chunk_count") or 0,
-        error_message=doc.get("error_message")
+        error_message=doc.get("error_message"),
+        processing_time_seconds=processing_time_seconds
     )

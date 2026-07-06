@@ -12,12 +12,7 @@ async def insert_chunks(
 ) -> List[Dict[str, Any]]:
     """
     Inserts a list of document chunks and their corresponding embeddings into the database.
-    
-    Args:
-        document_id: The UUID of the parent document.
-        user_id: The UUID of the owner.
-        chunks: List of dictionaries containing index, content, page ranges, and metadata.
-        embeddings: List of embedding vectors (list of floats).
+    Batches database writes in chunks of 50 to prevent statement timeouts.
     """
     rows = []
     for idx, chunk in enumerate(chunks):
@@ -32,9 +27,16 @@ async def insert_chunks(
             "embedding": embeddings[idx]
         })
     
-    # Supabase Postgrest API supports batch inserts directly
-    response = supabase.table("document_chunks").insert(rows).execute()
-    return response.data
+    inserted_data = []
+    batch_size = 50
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i : i + batch_size]
+        print(f"[DB] Inserting chunk batch {i // batch_size + 1}/{((len(rows)-1)//batch_size)+1} ({len(batch)} rows)...")
+        response = supabase.table("document_chunks").insert(batch).execute()
+        if response.data:
+            inserted_data.extend(response.data)
+            
+    return inserted_data
 
 async def delete_chunks_by_document(document_id: str) -> List[Dict[str, Any]]:
     """

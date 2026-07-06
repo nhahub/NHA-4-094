@@ -9,8 +9,8 @@ This is the document ingestion pipeline backend for the NHA-4-094 AI Study Platf
 - **Framework**: FastAPI (using standard ASGI entry point and routes).
 - **Supabase**: Uses the official Python client (`supabase` package) for database operations (Postgrest) and PDF storage (Supabase Storage). No complex SQLAlchemy/Alembic ORMs are used.
 - **Asynchronous Processing**: FastAPI's built-in `BackgroundTasks` executes document parsing, chunking, and embedding generation out-of-band to prevent blocking client requests.
-- **Embeddings**: Uses `sentence-transformers` with the model `all-MiniLM-L6-v2` locally on CPU. It produces **384-dimensional** vectors.
-- **pgvector**: Stores text chunks alongside 384-dimensional embeddings, with an HNSW cosine similarity index to support fast semantic search.
+- **Embeddings**: Uses **Cloudflare Workers AI BGE-M3** (`@cf/baai/bge-m3`) executing on Cloudflare's Edge. It produces **1024-dimensional** vectors.
+- **pgvector**: Stores text chunks alongside 1024-dimensional embeddings, with an HNSW cosine similarity index to support fast semantic search.
 
 ---
 
@@ -82,11 +82,11 @@ graph TD
 
 Ensure your database runs the SQL script under `app/db/migrations/001_init_documents.sql`:
 - **Uniqueness constraint**: `UNIQUE (user_id, file_hash)` ensures users cannot upload duplicate files.
-- **pgvector column**: `embedding vector(384)` matches the dimension of the default embedding model (`all-MiniLM-L6-v2`).
+- **pgvector column**: `embedding vector(1024)` matches the dimension of the default embedding model (`@cf/baai/bge-m3`).
 - **Semantic index**: Uses an HNSW cosine similarity index for fast similarity queries.
 
 > [!WARNING]
-> If you change the embedding model name (`EMBEDDING_MODEL_NAME`) to a model that outputs a different number of dimensions (e.g. OpenAI models at 1536), you **MUST** update `vector(384)` in `001_init_documents.sql` to match.
+> If you change the embedding model name (`EMBEDDING_MODEL_NAME`) to a model that outputs a different number of dimensions (e.g. OpenAI models at 1536), you **MUST** update `vector(1024)` in `001_init_documents.sql` to match.
 
 ---
 
@@ -251,5 +251,47 @@ The server will start at `http://localhost:8000`. You can inspect the interactiv
 After uploading a document and seeing its status change to `ready`, you can verify the results inside the Supabase project:
 - **Storage**: Go to **Storage -> study-documents** and verify that the PDF has been saved at `users/00000000-0000-0000-0000-000000000000/documents/{document_id}/{filename}`.
 - **Documents Table**: Check the `documents` table in **Table Editor** to see the metadata row status updated to `ready`, with the correct page count and chunk count.
-- **Document Chunks Table**: Check the `document_chunks` table to see all parsed text chunks, page starts, page ends, chunk metadata, and their 384-dimensional `embedding` vectors.
+- **Document Chunks Table**: Check the `document_chunks` table to see all parsed text chunks, page starts, page ends, chunk metadata, and their 1024-dimensional `embedding` vectors.
+
+---
+
+## Supabase Shared Teammate Project Integration & Deployment Details
+
+The integration of the FastAPI backend with the shared Supabase project ref `fkslyoxceczyhfhfldms` has been successfully completed. Below are the key deployment rules and architectural constraints:
+
+### 1. Database Schema Migrations
+- **Applied Migrations**:
+  - `001_init_documents.sql`: Configures pgvector and initializes the `documents` and `document_chunks` tables.
+  - `002_memory_personalization.sql`: Initializes tables for personalized memory (e.g. `chat_sessions`, `messages`, `memory_items`, `user_learning_profiles`, `planner_context`, etc.).
+  - `004_memory_enhancements.sql`: Adds tables/views for learning schedules, mistake tracking, and evolved persona history.
+- **Skipped Migrations**:
+  - `003_update_embedding_dimension.sql`: **Skipped in production**. Because the target Supabase project database was empty, migrations were run cleanly from scratch. Therefore, the base table `document_chunks` was directly initialized with `vector(1024)` in `001_init_documents.sql`, rendering the destructive migration `003` redundant and skipped.
+- **Embedding Vectors**: Hardcoded to `vector(1024)` to match the Cloudflare Workers AI BGE-M3 model (`@cf/baai/bge-m3`).
+
+### 2. Private Storage Buckets
+- The `study-documents` bucket is configured as a **private** bucket in Supabase Storage.
+- Download/upload links are signed or generated with server-side authorization.
+
+### 3. Server-side service_role Authority
+- The backend utilizes the `SUPABASE_SERVICE_ROLE_KEY` to initialize its client. This grants the ingestion workers authority to read/write records and bypass Row-Level Security (RLS) constraints.
+- **Security Constraint**: The `service_role` key must **never** be exposed in client code or frontend static assets. The client/frontend communicates exclusively with the backend via REST API using a mock or JWT user identifier.
+
+### 4. Required Deployment Environment Variables (Backend)
+
+Ensure your host environment defines these parameters:
+```bash
+# Supabase settings
+SUPABASE_URL=https://fkslyoxceczyhfhfldms.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key  # Backend-only secret
+SUPABASE_STORAGE_BUCKET=study-documents
+DATABASE_URL=postgresql://postgres.fkslyoxceczyhfhfldms:[PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require  # Pooled connection string
+
+# Cloudflare settings for BGE-M3
+CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
+CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
+CLOUDFLARE_AI_BASE_URL=https://api.cloudflare.com/client/v4
+
+# Configuration limits
+MAX_UPLOAD_SIZE_MB=10
+```
 

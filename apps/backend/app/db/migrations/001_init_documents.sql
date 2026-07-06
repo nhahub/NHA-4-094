@@ -1,8 +1,8 @@
 -- Migration: Initialize documents and document_chunks tables
 -- This migration script sets up pgvector and the core tables for the document pipeline.
 
--- Enable pgvector and uuid-ossp extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable pgvector and pgcrypto extensions
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Create documents metadata table
@@ -24,10 +24,9 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 -- Create document_chunks table
--- WARNING: The embedding vector dimension is hardcoded to 384 here to match the default
--- embedding model "all-MiniLM-L6-v2". If you change the embedding model to one that
--- returns a different number of dimensions (e.g., OpenAI text-embedding-3-small at 1536),
--- you MUST change the vector dimension (e.g. vector(1536)) in the DB schema.
+-- WARNING: The embedding vector dimension is hardcoded to 1024 here to match the default
+-- embedding model "@cf/baai/bge-m3". If you change the embedding model to one that
+-- returns a different number of dimensions, you MUST change the vector dimension.
 CREATE TABLE IF NOT EXISTS document_chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -37,7 +36,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     page_start INTEGER,
     page_end INTEGER,
     metadata JSONB DEFAULT '{}'::jsonb,
-    embedding vector(384),
+    embedding vector(1024),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -45,3 +44,14 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 CREATE INDEX IF NOT EXISTS document_chunks_embedding_idx
 ON document_chunks
 USING hnsw (embedding vector_cosine_ops);
+
+-- Enable Row-Level Security (RLS) on core tables
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS documents_policy ON documents;
+CREATE POLICY documents_policy ON documents
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+ALTER TABLE document_chunks ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS document_chunks_policy ON document_chunks;
+CREATE POLICY document_chunks_policy ON document_chunks
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);

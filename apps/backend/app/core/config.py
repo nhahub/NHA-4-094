@@ -15,12 +15,19 @@ class Settings(BaseSettings):
     # Validation limits
     MAX_UPLOAD_SIZE_MB: int = 10
 
+    # Google Gemini API Key — preserved in case it is used elsewhere
+    GEMINI_API_KEY: str = ""
 
     # Embedding configurations
-    # Note: "all-MiniLM-L6-v2" produces 384-dimensional vectors.
-    # If this model name is changed, the vector dimension in the migration script
-    # and pgvector column must be updated to match the new model's output size.
-    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    EMBEDDING_PROVIDER: str = "cloudflare"
+    EMBEDDING_MODEL_NAME: str = "@cf/baai/bge-m3"
+    EMBEDDING_DIMENSIONS: int = 1024
+    EMBEDDING_BATCH_SIZE: int = 32
+
+    # Cloudflare configurations
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
+    CLOUDFLARE_AI_BASE_URL: str = "https://api.cloudflare.com/client/v4"
 
     model_config = {
         "env_file": ".env",

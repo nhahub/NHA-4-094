@@ -18,3 +18,4 @@ class StatusResponse(BaseModel):
     page_count: Optional[int] = None
     chunk_count: Optional[int] = 0
     error_message: Optional[str] = None
+    processing_time_seconds: Optional[float] = None

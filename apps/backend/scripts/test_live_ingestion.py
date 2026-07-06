@@ -39,7 +39,7 @@ def create_sample_pdf(filename: str) -> bytes:
     c.drawString(100, 750, "Methodology and Technologies")
     c.drawString(100, 720, "We use Next.js for frontend and FastAPI for backend development.")
     c.drawString(100, 700, "Supabase serves as the backend database storing text chunks and vectors.")
-    c.drawString(100, 680, "The embedding model we load is all-MiniLM-L6-v2 returning 384 dimensions.")
+    c.drawString(100, 680, "The embedding model we load is Cloudflare BGE-M3 returning 1024 dimensions.")
     c.showPage()
     
     c.save()

@@ -36,7 +36,11 @@ async def chat_with_pdf(
     # TODO: user_id should come from authenticated user context (current_user_id) rather than body
     try:
         # Validate existence, ownership, and ingestion status
-        await validate_document_access(document_id, request.user_id)
+        # Use server-resolved identity (not client-supplied body field) for ownership check
+        await validate_document_access(document_id, current_user_id)
+        
+        # Inject document_id
+        request.document_id = document_id
         
         # Initialize Planner & Orchestrator
         planner = TaskPlanner()
@@ -92,7 +96,11 @@ async def summarize_pdf(
     """
     # TODO: user_id should come from authenticated user context (current_user_id) rather than body
     try:
-        await validate_document_access(document_id, request.user_id)
+        # Use server-resolved identity (not client-supplied body field) for ownership check
+        await validate_document_access(document_id, current_user_id)
+        
+        # Inject document_id
+        request.document_id = document_id
         
         planner = TaskPlanner()
         orchestrator = TaskOrchestrator()
@@ -139,7 +147,11 @@ async def generate_pdf_quiz(
     """
     # TODO: user_id should come from authenticated user context (current_user_id) rather than body
     try:
-        await validate_document_access(document_id, request.user_id)
+        # Use server-resolved identity (not client-supplied body field) for ownership check
+        await validate_document_access(document_id, current_user_id)
+        
+        # Inject document_id
+        request.document_id = document_id
         
         planner = TaskPlanner()
         orchestrator = TaskOrchestrator()

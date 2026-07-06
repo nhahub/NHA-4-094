@@ -96,12 +96,26 @@ async def mark_ready(document_id: str, page_count: int, chunk_count: int) -> Dic
     Marks the document as ready and updates total page/chunk counts.
     """
     print(f"[DB] Marking doc {document_id} as READY (pages: {page_count}, chunks: {chunk_count})")
+    
+    # Retrieve doc to find created_at
+    doc = await get_by_id(document_id)
+    processing_time_seconds = None
+    if doc and doc.get("created_at"):
+        from datetime import datetime, timezone
+        try:
+            created_at = datetime.fromisoformat(doc["created_at"].replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            processing_time_seconds = round((now - created_at).total_seconds(), 2)
+        except Exception as e:
+            logger.error(f"Error calculating processing time on ready: {e}")
+
     response = (
         supabase.table("documents")
         .update({
             "upload_status": "ready",
             "page_count": page_count,
             "chunk_count": chunk_count,
+            "processing_time_seconds": processing_time_seconds,
             "updated_at": "now()"
         })
         .eq("id", document_id)
@@ -117,11 +131,24 @@ async def mark_failed(document_id: str, error_message: str) -> Dict[str, Any]:
     Marks the document as failed and logs the error message.
     """
     print(f"[DB] Marking doc {document_id} as FAILED. Reason: {error_message}")
+    
+    doc = await get_by_id(document_id)
+    processing_time_seconds = None
+    if doc and doc.get("created_at"):
+        from datetime import datetime, timezone
+        try:
+            created_at = datetime.fromisoformat(doc["created_at"].replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            processing_time_seconds = round((now - created_at).total_seconds(), 2)
+        except Exception as e:
+            logger.error(f"Error calculating processing time on fail: {e}")
+
     response = (
         supabase.table("documents")
         .update({
             "upload_status": "failed",
             "error_message": error_message,
+            "processing_time_seconds": processing_time_seconds,
             "updated_at": "now()"
         })
         .eq("id", document_id)
