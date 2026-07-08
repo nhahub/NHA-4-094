@@ -51,6 +51,12 @@ MOCK_NOT_READY_DOC = {
     "upload_status": "uploaded",
     "chunk_count": 0
 }
+MOCK_READY_ZERO_CHUNKS_DOC = {
+    "id": "doc-ready-zero",
+    "user_id": MOCK_USER,
+    "upload_status": "ready",
+    "chunk_count": 0
+}
 MOCK_FOREIGN_DOC = {
     "id": "doc-foreign",
     "user_id": "11111111-1111-1111-1111-111111111111",
@@ -76,9 +82,10 @@ def test_chat_endpoint_success(mock_repo):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "الإجابة النهائية غير متاحة حاليًا" in data["message"]
+    # Merges summary + quiz success mock text
+    assert "مخرجات محاكاة تعليمية" in data["message"] or "سؤال محاكاة" in data["message"]
     assert len(data["tasks"]) == 2
-    assert data["confidence"] == 0.0
+    assert data["confidence"] == 0.8
 
 
 @patch("app.ai_system.orchestrator.document_guard.document_repository")
@@ -94,6 +101,23 @@ def test_chat_endpoint_document_not_ready(mock_repo):
     }
 
     response = client.post("/api/v1/documents/doc-not-ready/chat", json=payload)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "DOCUMENT_NOT_READY"
+
+
+@patch("app.ai_system.orchestrator.document_guard.document_repository")
+def test_chat_endpoint_ready_but_zero_chunks(mock_repo):
+    """Verifies that documents marked ready but having chunk_count=0 are rejected."""
+    mock_repo.get_by_id = AsyncMock(return_value=MOCK_READY_ZERO_CHUNKS_DOC)
+
+    payload = {
+        "user_id": MOCK_USER,
+        "session_id": "sess-xyz",
+        "message": "Hello",
+        "language": "en"
+    }
+
+    response = client.post("/api/v1/documents/doc-ready-zero/chat", json=payload)
     assert response.status_code == 400
     assert response.json()["detail"] == "DOCUMENT_NOT_READY"
 
@@ -169,7 +193,7 @@ def test_summary_shortcut_success(mock_repo):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "الإجابة النهائية غير متاحة حاليًا" in data["message"]
+    assert "Simulated educational answer output" in data["message"]
     assert len(data["tasks"]) == 1
     assert data["tasks"][0]["type"] == "summary"
 
@@ -193,6 +217,6 @@ def test_quiz_shortcut_success(mock_repo):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "الإجابة النهائية غير متاحة حاليًا" in data["message"]
+    assert "Simulated Question 1" in data["message"]
     assert len(data["tasks"]) == 1
     assert data["tasks"][0]["type"] == "quiz"

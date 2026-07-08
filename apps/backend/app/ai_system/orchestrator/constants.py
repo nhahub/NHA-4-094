@@ -1,12 +1,18 @@
-# Task Types
-TASK_CHAT_ANSWER = "chat_answer"
-TASK_EXPLAIN = "explain"
-TASK_SUMMARY = "summary"
-TASK_QUIZ = "quiz"
-TASK_ANSWER_TABLE = "answer_table"
-TASK_KEY_POINTS = "key_points"
-TASK_COMPARISON_TABLE = "comparison_table"
-TASK_UNKNOWN = "unknown"
+from app.schemas.ai_schema import TaskType, ExecutionMode
+
+# Task Types (string constants mapped to TaskType Enum values)
+TASK_CHAT_ANSWER = TaskType.CHAT_ANSWER.value
+TASK_EXPLAIN = TaskType.EXPLAIN.value
+TASK_SUMMARY = TaskType.SUMMARY.value
+TASK_QUIZ = TaskType.QUIZ.value
+TASK_ANSWER_TABLE = TaskType.ANSWER_TABLE.value
+TASK_KEY_POINTS = TaskType.KEY_POINTS.value
+TASK_COMPARISON_TABLE = TaskType.COMPARISON_TABLE.value
+TASK_FLASHCARDS = TaskType.FLASHCARDS.value
+TASK_ANSWER_EVALUATION = TaskType.ANSWER_EVALUATION.value
+TASK_CLARIFICATION = TaskType.CLARIFICATION.value
+TASK_OUT_OF_SCOPE = TaskType.OUT_OF_SCOPE.value
+TASK_UNKNOWN = TaskType.UNKNOWN.value
 
 SUPPORTED_TASK_TYPES = {
     TASK_CHAT_ANSWER,
@@ -16,18 +22,24 @@ SUPPORTED_TASK_TYPES = {
     TASK_ANSWER_TABLE,
     TASK_KEY_POINTS,
     TASK_COMPARISON_TABLE,
+    TASK_FLASHCARDS,
+    TASK_ANSWER_EVALUATION,
+    TASK_CLARIFICATION,
+    TASK_OUT_OF_SCOPE,
     TASK_UNKNOWN
 }
 
-# Execution Modes
-MODE_SINGLE = "single"
-MODE_PARALLEL = "parallel"
-MODE_SEQUENTIAL = "sequential"
+# Execution Modes (string constants mapped to ExecutionMode Enum values)
+MODE_SINGLE = ExecutionMode.SINGLE.value
+MODE_PARALLEL = ExecutionMode.PARALLEL.value
+MODE_SEQUENTIAL = ExecutionMode.SEQUENTIAL.value
+MODE_HYBRID = ExecutionMode.HYBRID.value
 
 SUPPORTED_EXECUTION_MODES = {
     MODE_SINGLE,
     MODE_PARALLEL,
-    MODE_SEQUENTIAL
+    MODE_SEQUENTIAL,
+    MODE_HYBRID
 }
 
 # Golden Rule Default No Answer response
@@ -45,7 +57,9 @@ KEYWORDS = {
         TASK_ANSWER_TABLE: ["جدول اجابات", "جدول إجابات", "جدول الاجابات", "جدول الإجابات", "اجوبة", "أجوبة"],
         TASK_EXPLAIN: ["اشرح", "شرح", "وضح", "توضيح", "فسر", "تفسير"],
         TASK_KEY_POINTS: ["النقاط الرئيسية", "نقاط رئيسية", "أهم النقاط", "اهم النقاط", "افكار رئيسية"],
-        TASK_COMPARISON_TABLE: ["جدول مقارنة", "مقارنة", "قارن", "جدول مقارنه"]
+        TASK_COMPARISON_TABLE: ["جدول مقارنة", "مقارنة", "قارن", "جدول مقارنه"],
+        TASK_FLASHCARDS: ["بطاقات استذكار", "فلاش كارد", "فلاش كاردز", "بطاقات تعليمية"],
+        TASK_ANSWER_EVALUATION: ["تقييم اجابة", "تقييم إجابة", "قيم اجابتي", "تصحيح اجابتي", "صحح لي"]
     },
     "en": {
         TASK_SUMMARY: ["summarize", "summary", "brief", "digest", "shorten"],
@@ -53,6 +67,8 @@ KEYWORDS = {
         TASK_ANSWER_TABLE: ["answer table", "answers table", "solution table", "answer sheet"],
         TASK_EXPLAIN: ["explain", "explanation", "clarify", "describe"],
         TASK_KEY_POINTS: ["key points", "bullet points", "main ideas", "takeaways"],
-        TASK_COMPARISON_TABLE: ["comparison table", "compare", "contrast"]
+        TASK_COMPARISON_TABLE: ["comparison table", "compare", "contrast"],
+        TASK_FLASHCARDS: ["flashcard", "flashcards", "study cards"],
+        TASK_ANSWER_EVALUATION: ["evaluate answer", "grade my answer", "check my answer", "correct my answer"]
     }
 }

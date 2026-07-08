@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from app.schemas.ai_schema import PDFChatRequest, QuizRequest, SummaryRequest
+from app.schemas.ai_schema import PDFChatRequest, QuizRequest, SummaryRequest, TaskType, ExecutionMode
 from app.ai_system.orchestrator.planner import TaskPlanner
 from app.ai_system.orchestrator.constants import (
     TASK_SUMMARY,
@@ -10,9 +10,10 @@ from app.ai_system.orchestrator.constants import (
     TASK_CHAT_ANSWER,
     MODE_SINGLE,
     MODE_PARALLEL,
-    MODE_SEQUENTIAL
+    MODE_SEQUENTIAL,
+    MODE_HYBRID
 )
-from app.ai_system.orchestrator.errors import PlanningError
+from app.ai_system.orchestrator.errors import PlanningError, CircularDependencyError
 
 def test_pydantic_schema_validations():
     # 1. Invalid language
@@ -70,24 +71,24 @@ def test_planner_single_intent():
     # Summary Arabic
     req = PDFChatRequest(user_id="user_1", session_id="sess_1", message="لخصلي هاد الملف من فضلك", language="ar")
     plan = planner.plan(req)
-    assert plan.execution_mode == MODE_SINGLE
+    assert plan.execution_mode == ExecutionMode.SINGLE
     assert len(plan.tasks) == 1
-    assert plan.tasks[0].type == TASK_SUMMARY
+    assert plan.tasks[0].type == TaskType.SUMMARY
     assert not plan.needs_clarification
 
     # Quiz English
     req = PDFChatRequest(user_id="user_1", session_id="sess_1", message="Make a quick quiz for me", language="en")
     plan = planner.plan(req)
-    assert plan.execution_mode == MODE_SINGLE
+    assert plan.execution_mode == ExecutionMode.SINGLE
     assert len(plan.tasks) == 1
-    assert plan.tasks[0].type == TASK_QUIZ
+    assert plan.tasks[0].type == TaskType.QUIZ
 
     # Explain Arabic
     req = PDFChatRequest(user_id="user_1", session_id="sess_1", message="ممكن تشرحلي القسم الأول؟", language="ar")
     plan = planner.plan(req)
-    assert plan.execution_mode == MODE_SINGLE
+    assert plan.execution_mode == ExecutionMode.SINGLE
     assert len(plan.tasks) == 1
-    assert plan.tasks[0].type == TASK_EXPLAIN
+    assert plan.tasks[0].type == TaskType.EXPLAIN
 
 
 def test_planner_compound_intents():
@@ -101,16 +102,15 @@ def test_planner_compound_intents():
         language="en"
     )
     plan = planner.plan(req)
-    assert plan.execution_mode == MODE_PARALLEL
+    assert plan.execution_mode == ExecutionMode.PARALLEL
     assert len(plan.tasks) == 2
     types = {t.type for t in plan.tasks}
-    assert TASK_SUMMARY in types
-    assert TASK_QUIZ in types
-    # No dependencies planned since they are independent
+    assert TaskType.SUMMARY in types
+    assert TaskType.QUIZ in types
     for t in plan.tasks:
         assert len(t.depends_on) == 0
 
-    # Quiz and Answer Table (dependent tasks -> sequential execution)
+    # Quiz and Answer Table (dependent tasks -> hybrid/sequential execution batches)
     req = PDFChatRequest(
         user_id="user_1",
         session_id="sess_1",
@@ -118,11 +118,11 @@ def test_planner_compound_intents():
         language="ar"
     )
     plan = planner.plan(req)
-    assert plan.execution_mode == MODE_SEQUENTIAL
+    assert plan.execution_mode == ExecutionMode.HYBRID
     assert len(plan.tasks) == 2
     
-    quiz_task = next(t for t in plan.tasks if t.type == TASK_QUIZ)
-    ans_task = next(t for t in plan.tasks if t.type == TASK_ANSWER_TABLE)
+    quiz_task = next(t for t in plan.tasks if t.type == TaskType.QUIZ)
+    ans_task = next(t for t in plan.tasks if t.type == TaskType.ANSWER_TABLE)
     
     assert ans_task.depends_on == [quiz_task.task_id]
 
@@ -151,6 +151,17 @@ def test_planner_default_chat():
     # Standard query with no intent keywords defaults to chat_answer
     req = PDFChatRequest(user_id="user_1", session_id="sess_1", message="ما الذي يتحدث عنه القسم الثاني؟", language="ar")
     plan = planner.plan(req)
-    assert plan.execution_mode == MODE_SINGLE
+    assert plan.execution_mode == ExecutionMode.SINGLE
     assert len(plan.tasks) == 1
-    assert plan.tasks[0].type == TASK_CHAT_ANSWER
+    assert plan.tasks[0].type == TaskType.CHAT_ANSWER
+
+
+def test_planner_circular_dependency_error():
+    planner = TaskPlanner()
+    from app.schemas.ai_schema import Task
+    tasks = [
+        Task(task_id="t1", type=TaskType.QUIZ, query="quiz", depends_on=["t2"]),
+        Task(task_id="t2", type=TaskType.ANSWER_TABLE, query="answers", depends_on=["t1"])
+    ]
+    with pytest.raises(CircularDependencyError):
+        planner._topological_sort(tasks)

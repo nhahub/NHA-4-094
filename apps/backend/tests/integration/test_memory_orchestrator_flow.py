@@ -70,7 +70,7 @@ def test_orchestrator_flow_success_with_memory_and_traceability(
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "الإجابة النهائية غير متاحة حاليًا" in data["message"]
+    assert "Simulated educational" in data["message"]
 
     # Assert assistant message is saved with traceability
     assert mock_save.call_count >= 1

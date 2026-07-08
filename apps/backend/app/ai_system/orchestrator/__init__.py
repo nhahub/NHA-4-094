@@ -7,6 +7,7 @@ from app.ai_system.orchestrator.errors import (
     DocumentAccessDeniedError,
     DocumentNotReadyError,
     PlanningError,
+    CircularDependencyError,
     ExecutionError,
     AllTasksFailedError
 )
@@ -20,6 +21,7 @@ __all__ = [
     "DocumentAccessDeniedError",
     "DocumentNotReadyError",
     "PlanningError",
+    "CircularDependencyError",
     "ExecutionError",
     "AllTasksFailedError"
 ]

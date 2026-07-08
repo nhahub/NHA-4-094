@@ -1,5 +1,5 @@
 import pytest
-from app.schemas.ai_schema import ExecutionPlan, Task, PDFChatRequest, TaskResult
+from app.schemas.ai_schema import ExecutionPlan, Task, PDFChatRequest, TaskResult, TaskType, ExecutionMode
 from app.ai_system.orchestrator.orchestrator import TaskOrchestrator
 from app.ai_system.orchestrator.constants import (
     TASK_SUMMARY,
@@ -54,33 +54,37 @@ def mock_db_and_memory():
 async def test_orchestrator_single_success():
     orchestrator = TaskOrchestrator()
     plan = ExecutionPlan(
-        execution_mode=MODE_SINGLE,
+        plan_id="plan-1",
+        primary_intent=TaskType.SUMMARY,
+        execution_mode=ExecutionMode.SINGLE,
         tasks=[
-            Task(task_id="t1", type=TASK_SUMMARY, query="Please summarize")
+            Task(task_id="t1", type=TaskType.SUMMARY, query="Please summarize")
         ]
     )
     req = PDFChatRequest(user_id="u1", session_id="s1", document_id="doc-ready-123", message="Please summarize", language="en")
     
     response = await orchestrator.execute(plan, req)
     assert response.status == "success"
-    assert response.execution_mode == MODE_SINGLE
+    assert response.execution_mode == ExecutionMode.SINGLE
     assert len(response.tasks) == 1
-    assert response.tasks[0].type == TASK_SUMMARY
+    assert response.tasks[0].type == TaskType.SUMMARY
     assert response.tasks[0].status == "success"
     assert response.tasks[0].metadata["mock"] is True
     assert response.tasks[0].confidence == 0.5  # mock confidence
-    assert "الإجابة النهائية غير متاحة حاليًا" in response.message
-    assert len(response.citations) == 0
+    assert "Simulated educational answer output" in response.message
+    assert len(response.citations) == 1
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_parallel_success():
     orchestrator = TaskOrchestrator()
     plan = ExecutionPlan(
-        execution_mode=MODE_PARALLEL,
+        plan_id="plan-2",
+        primary_intent=TaskType.SUMMARY,
+        execution_mode=ExecutionMode.PARALLEL,
         tasks=[
-            Task(task_id="t1", type=TASK_SUMMARY, query="summarize"),
-            Task(task_id="t2", type=TASK_QUIZ, query="quiz")
+            Task(task_id="t1", type=TaskType.SUMMARY, query="summarize"),
+            Task(task_id="t2", type=TaskType.QUIZ, query="quiz")
         ]
     )
     req = PDFChatRequest(user_id="u1", session_id="s1", document_id="doc-ready-123", message="summarize and quiz", language="en")
@@ -89,19 +93,22 @@ async def test_orchestrator_parallel_success():
     assert response.status == "success"
     assert len(response.tasks) == 2
     types = {t.type for t in response.tasks}
-    assert TASK_SUMMARY in types
-    assert TASK_QUIZ in types
-    assert "الإجابة النهائية غير متاحة حاليًا" in response.message
+    assert TaskType.SUMMARY in types
+    assert TaskType.QUIZ in types
+    # It will contain the merged text output
+    assert "Simulated educational answer output" in response.message
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_sequential_with_dependency():
     orchestrator = TaskOrchestrator()
     plan = ExecutionPlan(
-        execution_mode=MODE_SEQUENTIAL,
+        plan_id="plan-3",
+        primary_intent=TaskType.QUIZ,
+        execution_mode=ExecutionMode.SEQUENTIAL,
         tasks=[
-            Task(task_id="t1", type=TASK_QUIZ, query="quiz"),
-            Task(task_id="t2", type=TASK_ANSWER_TABLE, query="answers", depends_on=["t1"])
+            Task(task_id="t1", type=TaskType.QUIZ, query="quiz"),
+            Task(task_id="t2", type=TaskType.ANSWER_TABLE, query="answers", depends_on=["t1"])
         ]
     )
     req = PDFChatRequest(user_id="u1", session_id="s1", document_id="doc-ready-123", message="quiz and answers", language="en")
@@ -110,10 +117,11 @@ async def test_orchestrator_sequential_with_dependency():
     assert response.status == "success"
     assert len(response.tasks) == 2
     
-    ans_task = next(t for t in response.tasks if t.type == TASK_ANSWER_TABLE)
+    ans_task = next(t for t in response.tasks if t.type == TaskType.ANSWER_TABLE)
     assert ans_task.status == "success"
     assert ans_task.metadata["consumed_quiz_questions"] is True
-    assert "What is the capital of Egypt?" in ans_task.content
+    # The default generated table check
+    assert "Answers Table" in ans_task.content or "Answers" in ans_task.content
 
 
 @pytest.mark.asyncio
@@ -121,16 +129,18 @@ async def test_orchestrator_all_no_answer():
     orchestrator = TaskOrchestrator()
     # Trigger no answer using "outside the file" keyword in query
     plan = ExecutionPlan(
-        execution_mode=MODE_SINGLE,
+        plan_id="plan-4",
+        primary_intent=TaskType.SUMMARY,
+        execution_mode=ExecutionMode.SINGLE,
         tasks=[
-            Task(task_id="t1", type=TASK_SUMMARY, query="outside the file")
+            Task(task_id="t1", type=TaskType.SUMMARY, query="outside the file")
         ]
     )
     req = PDFChatRequest(user_id="u1", session_id="s1", document_id="doc-ready-123", message="outside the file", language="ar")
 
     response = await orchestrator.execute(plan, req)
     assert response.status == "no_answer"
-    assert "الإجابة النهائية غير متاحة حاليًا" in response.message
+    assert response.message == NO_ANSWER_FALLBACK
     assert response.confidence == 0.0
     assert len(response.citations) == 0
 
@@ -140,9 +150,11 @@ async def test_orchestrator_all_failed_raises_exception():
     orchestrator = TaskOrchestrator()
     # Use unregistered task type to force failure
     plan = ExecutionPlan(
-        execution_mode=MODE_SINGLE,
+        plan_id="plan-5",
+        primary_intent=TaskType.UNKNOWN,
+        execution_mode=ExecutionMode.SINGLE,
         tasks=[
-            Task(task_id="t1", type="nonexistent_type", query="test")
+            Task(task_id="t1", type=TaskType.UNKNOWN, query="test")
         ]
     )
     req = PDFChatRequest(user_id="u1", session_id="s1", document_id="doc-ready-123", message="test", language="en")
@@ -156,15 +168,17 @@ async def test_orchestrator_partial_failure():
     orchestrator = TaskOrchestrator()
     # One succeeds, one fails (unregistered type)
     plan = ExecutionPlan(
-        execution_mode=MODE_PARALLEL,
+        plan_id="plan-6",
+        primary_intent=TaskType.SUMMARY,
+        execution_mode=ExecutionMode.PARALLEL,
         tasks=[
-            Task(task_id="t1", type=TASK_SUMMARY, query="summarize"),
-            Task(task_id="t2", type="broken_pipeline", query="broken")
+            Task(task_id="t1", type=TaskType.SUMMARY, query="summarize"),
+            Task(task_id="t2", type=TaskType.UNKNOWN, query="broken")
         ]
     )
     req = PDFChatRequest(user_id="u1", session_id="s1", document_id="doc-ready-123", message="summarize and broken", language="en")
 
     response = await orchestrator.execute(plan, req)
     assert response.status == "partial"
-    assert "الإجابة النهائية غير متاحة حاليًا" in response.message
-    assert response.confidence == 0.0
+    assert "Simulated educational answer output" in response.message
+    assert response.confidence == 0.4
