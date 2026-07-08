@@ -20,6 +20,10 @@ class PlanningError(OrchestrationError):
     """Raised when parsing or task planning fails validation constraints."""
     pass
 
+class CircularDependencyError(PlanningError):
+    """Raised when circular dependencies are detected in the DAG task plan."""
+    pass
+
 class ExecutionError(OrchestrationError):
     """Raised when executing a specific pipeline task fails."""
     pass

@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.ai_schema import PDFChatRequest, SummaryRequest, QuizRequest, AIResponse
-from app.ai_system.orchestrator import (
-    TaskPlanner,
-    TaskOrchestrator,
-    validate_document_access,
+from app.services.ai_orchestrator import ai_orchestrator_service
+from app.ai_system.orchestrator.errors import (
     DocumentNotFoundError,
     DocumentAccessDeniedError,
     DocumentNotReadyError,
@@ -33,24 +31,12 @@ async def chat_with_pdf(
     PDF-bound conversational search. Accepts any PDF-grounded user query, detects intent,
     plans subtasks (single/compound), executes them over document chunks, and aggregates responses.
     """
-    # TODO: user_id should come from authenticated user context (current_user_id) rather than body
     try:
-        # Validate existence, ownership, and ingestion status
-        # Use server-resolved identity (not client-supplied body field) for ownership check
-        await validate_document_access(document_id, current_user_id)
-        
-        # Inject document_id
-        request.document_id = document_id
-        
-        # Initialize Planner & Orchestrator
-        planner = TaskPlanner()
-        orchestrator = TaskOrchestrator()
-        
-        # Build plan
-        plan = planner.plan(request)
-        
-        # Execute & return merged response
-        response = await orchestrator.execute(plan, request)
+        response = await ai_orchestrator_service.execute_query(
+            document_id=document_id,
+            request=request,
+            user_id=current_user_id
+        )
         return response
 
     except DocumentNotFoundError:
@@ -68,7 +54,7 @@ async def chat_with_pdf(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="DOCUMENT_NOT_READY"
         )
-    except PlanningError as pe:
+    except PlanningError:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="PLANNING_FAILED"
@@ -94,19 +80,12 @@ async def summarize_pdf(
     Shortcut endpoint to generate a document-level summary.
     Schedules a single 'summary' task utilizing document-level context chunks.
     """
-    # TODO: user_id should come from authenticated user context (current_user_id) rather than body
     try:
-        # Use server-resolved identity (not client-supplied body field) for ownership check
-        await validate_document_access(document_id, current_user_id)
-        
-        # Inject document_id
-        request.document_id = document_id
-        
-        planner = TaskPlanner()
-        orchestrator = TaskOrchestrator()
-        
-        plan = planner.plan(request)
-        response = await orchestrator.execute(plan, request)
+        response = await ai_orchestrator_service.execute_query(
+            document_id=document_id,
+            request=request,
+            user_id=current_user_id
+        )
         return response
 
     except DocumentNotFoundError:
@@ -145,19 +124,12 @@ async def generate_pdf_quiz(
     Shortcut endpoint to generate a quiz from the PDF document.
     Schedules a single 'quiz' task utilizing document-level context chunks.
     """
-    # TODO: user_id should come from authenticated user context (current_user_id) rather than body
     try:
-        # Use server-resolved identity (not client-supplied body field) for ownership check
-        await validate_document_access(document_id, current_user_id)
-        
-        # Inject document_id
-        request.document_id = document_id
-        
-        planner = TaskPlanner()
-        orchestrator = TaskOrchestrator()
-        
-        plan = planner.plan(request)
-        response = await orchestrator.execute(plan, request)
+        response = await ai_orchestrator_service.execute_query(
+            document_id=document_id,
+            request=request,
+            user_id=current_user_id
+        )
         return response
 
     except DocumentNotFoundError:

@@ -4,17 +4,28 @@ from unittest.mock import AsyncMock, patch
 from app.main import app
 
 from app.ai_system.memory.memory_types import MemoryContext
+from app.ai_system.retrieval.schemas import RetrievalResult, RetrievalStatus, RetrievedChunk
 
 @pytest.fixture(autouse=True)
 def mock_db_and_memory():
-    with patch("app.db.repositories.chunk_repository.get_chunks_by_document", new_callable=AsyncMock) as mock_chunks, \
+    with patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock) as mock_retrieve, \
          patch("app.db.repositories.chat_repository.save_message", new_callable=AsyncMock) as mock_save, \
          patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock) as mock_ctx, \
          patch("app.ai_system.orchestrator.pipeline_registry.store.save_message", new_callable=AsyncMock) as mock_store_save, \
-         patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock) as mock_sum, \
-         patch("app.ai_system.orchestrator.pipeline_registry.llm_generate", new_callable=AsyncMock) as mock_llm_gen:
+          patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock) as mock_sum, \
+          patch("app.ai_system.orchestrator.pipeline_registry.llm_generate", new_callable=AsyncMock) as mock_llm_gen:
         
-        mock_chunks.return_value = [{"id": "chunk-abc", "content": "Photosynthesis process.", "user_id": "u1", "chunk_index": 0}]
+        mock_retrieve.return_value = RetrievalResult(
+            status=RetrievalStatus.FOUND,
+            confidence=0.9,
+            chunks=[
+                RetrievedChunk(
+                    chunk_id="chunk-abc", document_id="doc-ready-123", user_id="u1",
+                    text="Photosynthesis process.", score=0.9, page_number=1,
+                )
+            ],
+            context_text="[Chunk ID: chunk-abc | Page: 1 | Section: unknown | Score: 0.90]\nPhotosynthesis process.",
+        )
         mock_ctx.return_value = MemoryContext(
             user_profile=None,
             session_summary=None,
@@ -90,6 +101,12 @@ MOCK_NOT_READY_DOC = {
     "upload_status": "uploaded",
     "chunk_count": 0
 }
+MOCK_READY_ZERO_CHUNKS_DOC = {
+    "id": "doc-ready-zero",
+    "user_id": MOCK_USER,
+    "upload_status": "ready",
+    "chunk_count": 0
+}
 MOCK_FOREIGN_DOC = {
     "id": "doc-foreign",
     "user_id": "11111111-1111-1111-1111-111111111111",
@@ -134,6 +151,23 @@ def test_chat_endpoint_document_not_ready(mock_repo):
     }
 
     response = client.post("/api/v1/documents/doc-not-ready/chat", json=payload)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "DOCUMENT_NOT_READY"
+
+
+@patch("app.ai_system.orchestrator.document_guard.document_repository")
+def test_chat_endpoint_ready_but_zero_chunks(mock_repo):
+    """Verifies that documents marked ready but having chunk_count=0 are rejected."""
+    mock_repo.get_by_id = AsyncMock(return_value=MOCK_READY_ZERO_CHUNKS_DOC)
+
+    payload = {
+        "user_id": MOCK_USER,
+        "session_id": "sess-xyz",
+        "message": "Hello",
+        "language": "en"
+    }
+
+    response = client.post("/api/v1/documents/doc-ready-zero/chat", json=payload)
     assert response.status_code == 400
     assert response.json()["detail"] == "DOCUMENT_NOT_READY"
 

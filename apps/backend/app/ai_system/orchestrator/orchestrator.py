@@ -1,24 +1,26 @@
 import asyncio
+import json
 from typing import List, Dict, Any, Optional
-from app.schemas.ai_schema import ExecutionPlan, Task, TaskResult, AIResponse, Citation
+from app.schemas.ai_schema import ExecutionPlan, Task, TaskResult, AIResponse, Citation, ExecutionMode
 from app.ai_system.orchestrator.pipeline_registry import PIPELINE_REGISTRY
 from app.ai_system.orchestrator.constants import (
     MODE_SINGLE,
     MODE_PARALLEL,
     MODE_SEQUENTIAL,
+    MODE_HYBRID,
     NO_ANSWER_FALLBACK
 )
 from app.ai_system.orchestrator.errors import AllTasksFailedError, ExecutionError
 
 class TaskOrchestrator:
     """
-    Orchestrator that executes the ExecutionPlan using single, parallel, or sequential modes,
-    and merges the resulting TaskResults into a unified AIResponse.
+    Orchestrator that executes the ExecutionPlan using single, parallel, sequential,
+    or hybrid dependency DAG execution, and merges the resulting TaskResults into a unified AIResponse.
     """
 
     async def execute(self, plan: ExecutionPlan, request: Any) -> AIResponse:
         """
-        Executes the plan and merges the results.
+        Executes the plan according to the specified execution mode and dependencies.
         """
         if not plan.tasks:
             # Plan has no tasks (e.g., clarification required)
@@ -37,24 +39,70 @@ class TaskOrchestrator:
                 metadata={"mock": True}
             )
 
-        task_results: Dict[str, TaskResult] = {}
+        completed_results: Dict[str, TaskResult] = {}
+        pending_tasks = list(plan.tasks)
 
-        if plan.execution_mode == MODE_SINGLE:
-            # Single task execution
-            task = plan.tasks[0]
-            result = await self._execute_task(task, request)
-            task_results[task.task_id] = result
-
-        elif plan.execution_mode == MODE_PARALLEL:
-            # Parallel independent tasks execution using asyncio.gather
-            tasks_to_run = [self._execute_task(t, request) for t in plan.tasks]
-            results = await asyncio.gather(*tasks_to_run, return_exceptions=True)
+        # Batch-based topological loop scheduler (satisfies single, parallel, sequential, and hybrid DAGs)
+        while pending_tasks:
+            ready_tasks = []
+            blocked_tasks = []
             
-            for task, res in zip(plan.tasks, results):
+            for t in pending_tasks:
+                deps_met = True
+                dep_failed = False
+                for dep_id in t.depends_on:
+                    if dep_id not in completed_results:
+                        deps_met = False
+                    elif completed_results[dep_id].status in ["failed", "no_answer"]:
+                        dep_failed = True
+                
+                if dep_failed:
+                    # Prerequisite failed -> mark this task as failed immediately
+                    completed_results[t.task_id] = TaskResult(
+                        task_id=t.task_id,
+                        type=t.type,
+                        status="failed",
+                        content="",
+                        citations=[],
+                        confidence=0.0,
+                        error="Prerequisite task failed or returned no answer.",
+                        metadata={"mock": False}
+                    )
+                    blocked_tasks.append(t)
+                elif deps_met:
+                    ready_tasks.append(t)
+            
+            # Remove blocked tasks from execution loop
+            for t in blocked_tasks:
+                pending_tasks.remove(t)
+            
+            if not ready_tasks:
+                if pending_tasks:
+                    # Cycle or unresolvable dependencies detected
+                    for t in pending_tasks:
+                        completed_results[t.task_id] = TaskResult(
+                            task_id=t.task_id,
+                            type=t.type,
+                            status="failed",
+                            content="",
+                            citations=[],
+                            confidence=0.0,
+                            error="Circular dependency or deadlocked task graph.",
+                            metadata={"mock": False}
+                        )
+                    break
+                else:
+                    break
+
+            # Execute ready tasks in parallel
+            run_futures = [self._execute_task(t, request, completed_results) for t in ready_tasks]
+            results = await asyncio.gather(*run_futures, return_exceptions=True)
+            
+            for t, res in zip(ready_tasks, results):
                 if isinstance(res, Exception):
-                    task_results[task.task_id] = TaskResult(
-                        task_id=task.task_id,
-                        type=task.type,
+                    completed_results[t.task_id] = TaskResult(
+                        task_id=t.task_id,
+                        type=t.type,
                         status="failed",
                         content="",
                         citations=[],
@@ -63,42 +111,15 @@ class TaskOrchestrator:
                         metadata={"mock": False}
                     )
                 else:
-                    task_results[task.task_id] = res
-
-        elif plan.execution_mode == MODE_SEQUENTIAL:
-            # Sequential task execution (respecting depends_on list order)
-            # Since the planner schedules them topologically, we can execute them sequentially in order.
-            for task in plan.tasks:
-                # Check if dependencies failed
-                dep_failed = False
-                for dep_id in task.depends_on:
-                    dep_res = task_results.get(dep_id)
-                    if not dep_res or dep_res.status in ["failed", "no_answer"]:
-                        dep_failed = True
-                        break
+                    completed_results[t.task_id] = res
                 
-                if dep_failed:
-                    task_results[task.task_id] = TaskResult(
-                        task_id=task.task_id,
-                        type=task.type,
-                        status="failed",
-                        content="",
-                        citations=[],
-                        confidence=0.0,
-                        error="Prerequisite task failed or returned no answer.",
-                        metadata={"mock": False}
-                    )
-                else:
-                    result = await self._execute_task(task, request, task_results)
-                    task_results[task.task_id] = result
-        else:
-            raise ExecutionError(f"Unsupported execution mode: {plan.execution_mode}")
+                pending_tasks.remove(t)
 
-        return self._merge_results(task_results, plan)
+        return self._merge_results(completed_results, plan)
 
     async def _execute_task(self, task: Task, request: Any, previous_results: Optional[Dict[str, TaskResult]] = None) -> TaskResult:
         """Executes a single task by routing it to its registered pipeline wrapper."""
-        pipeline_fn = PIPELINE_REGISTRY.get(task.type)
+        pipeline_fn = PIPELINE_REGISTRY.get(task.type.value)
         if not pipeline_fn:
             return TaskResult(
                 task_id=task.task_id,
@@ -107,12 +128,12 @@ class TaskOrchestrator:
                 content="",
                 citations=[],
                 confidence=0.0,
-                error=f"No pipeline registered for task type: '{task.type}'",
+                error=f"No pipeline registered for task type: '{task.type.value}'",
                 metadata={"mock": False}
             )
         
         try:
-            # Inject optional parameters (difficulty, number_of_questions, etc.) from task metadata to request
+            # Inject optional parameters from task metadata to request
             if task.metadata:
                 for k, v in task.metadata.items():
                     if not hasattr(request, k) or getattr(request, k) is None:
@@ -135,33 +156,33 @@ class TaskOrchestrator:
         results_list = list(task_results.values())
         
         # 1. Planner Trace
-        intents = [t.type for t in plan.tasks]
+        intents = [t.type.value for t in plan.tasks]
         planner_trace = {
             "status": "completed",
             "mode": "rule_based",
             "llm_used": False,
             "intent": ", ".join(intents) if intents else "unknown",
-            "execution_mode": plan.execution_mode,
+            "execution_mode": plan.execution_mode.value,
             "tasks": [
                 {
                     "task_id": t.task_id,
-                    "type": t.type,
+                    "type": t.type.value,
                     "query": t.query,
                     "depends_on": t.depends_on
                 } for t in plan.tasks
             ],
-            "confidence": 0.0  # Do not show fake confidence values
+            "confidence": plan.confidence
         }
 
         # 2. Orchestrator Trace
         orchestrator_trace = {
-            "status": "routed_only",
-            "selected_execution_mode": plan.execution_mode,
-            "selected_pipeline_names": [t.type for t in plan.tasks],
-            "dag_mode": "not_used",
-            "parallel_sequential_hybrid_status": "sequential" if plan.execution_mode == "single" else plan.execution_mode,
-            "launched_task_names": [t.type for t in plan.tasks],
-            "retrieval_status": "temporary_chunk_context_until_rag",
+            "status": "completed",
+            "selected_execution_mode": plan.execution_mode.value,
+            "selected_pipeline_names": [t.type.value for t in plan.tasks],
+            "dag_mode": "used" if plan.execution_mode == ExecutionMode.HYBRID else "not_used",
+            "parallel_sequential_hybrid_status": plan.execution_mode.value,
+            "launched_task_names": [t.type.value for t in plan.tasks],
+            "retrieval_status": "not_run",
             "verifier_status": "not_run",
             "fallback_used": False
         }
@@ -176,7 +197,6 @@ class TaskOrchestrator:
             if tr.metadata and "memory_info" in tr.metadata:
                 mem_info = tr.metadata["memory_info"]
                 profile_level = mem_info.get("academic_level", "beginner")
-                # Retrieve retrieved_memory_count safely
                 retrieved_memory_count = mem_info.get("retrieved_memory_count", 0)
                 personalization_applied = mem_info.get("has_personalization", False)
                 break
@@ -188,10 +208,39 @@ class TaskOrchestrator:
             "personalization_applied": personalization_applied
         }
 
+        # 4. Retrieval (RAG) Trace
+        retrieval_status = "not_run"
+        retrieval_confidence = 0.0
+        retrieval_chunks_used = 0
+        retrieval_latency_ms = 0
+        verifier_run = False
+        
+        for tr in results_list:
+            if tr.metadata and "retrieval_info" in tr.metadata:
+                r_info = tr.metadata["retrieval_info"]
+                retrieval_status = r_info.get("status", "not_run")
+                retrieval_confidence = r_info.get("confidence", 0.0)
+                retrieval_chunks_used = r_info.get("chunks_used", 0)
+                retrieval_latency_ms = r_info.get("latency_ms", 0)
+            
+            if tr.metadata and "verification_info" in tr.metadata:
+                verifier_run = True
+
+        orchestrator_trace["retrieval_status"] = retrieval_status
+        orchestrator_trace["verifier_status"] = "passed" if verifier_run else "not_run"
+
+        retrieval_trace = {
+            "status": retrieval_status,
+            "confidence": retrieval_confidence,
+            "chunks_used": retrieval_chunks_used,
+            "latency_ms": retrieval_latency_ms
+        }
+
         return {
             "planner": planner_trace,
             "orchestrator": orchestrator_trace,
-            "memory": memory_trace
+            "memory": memory_trace,
+            "retrieval": retrieval_trace
         }
 
     def _merge_results(self, task_results: Dict[str, TaskResult], plan: ExecutionPlan) -> AIResponse:
@@ -199,7 +248,21 @@ class TaskOrchestrator:
         results_list = list(task_results.values())
         trace = self._construct_pipeline_trace(plan, task_results)
         
-        # 1. Check for "all failed"
+        # 1. Check for "all no_answer"
+        all_no_answer = all(r.status == "no_answer" for r in results_list)
+        if all_no_answer:
+            return AIResponse(
+                status="no_answer",
+                message=NO_ANSWER_FALLBACK,
+                execution_mode=plan.execution_mode,
+                tasks=results_list,
+                citations=[],
+                confidence=0.0,
+                metadata={"mock": False},
+                pipeline_trace=trace
+            )
+
+        # 2. Check for "all failed"
         all_failed = all(r.status == "failed" for r in results_list)
         if all_failed:
             raise AllTasksFailedError("ALL_TASKS_FAILED")
@@ -265,12 +328,38 @@ class TaskOrchestrator:
         else:
             response_status = "success"
 
+        # Concat individual success responses
+        success_contents = []
+        citations_list = []
+        for r in results_list:
+            if r.status == "success":
+                if isinstance(r.content, str):
+                    success_contents.append(r.content)
+                elif r.content is not None:
+                    success_contents.append(json.dumps(r.content, ensure_ascii=False))
+                
+                if r.citations:
+                    citations_list.extend(r.citations)
+
+        # Deduplicate citations if needed
+        seen_chunks = set()
+        deduped_citations = []
+        for c in citations_list:
+            if c.chunk_id not in seen_chunks:
+                seen_chunks.add(c.chunk_id)
+                deduped_citations.append(c)
+
+        if success_contents:
+            merged_message = "\n\n".join(success_contents)
+        else:
+            merged_message = NO_ANSWER_FALLBACK
+
         return AIResponse(
             status=response_status,
             message=message,
             execution_mode=plan.execution_mode,
             tasks=results_list,
-            citations=citations,
+            citations=deduped_citations,
             confidence=0.9,
             metadata={"mock": False},
             pipeline_trace=trace
