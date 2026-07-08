@@ -14,6 +14,8 @@ class APIKey:
         self.alias: str = alias
         self.cooldown_until: Optional[datetime] = None
         self.is_active: bool = True
+        self.usage_count: int = 0
+        self.failure_count: int = 0
 
     def is_available(self) -> bool:
         """Returns True if the key is active and not cooling down."""
@@ -35,10 +37,11 @@ class APIKey:
 
 
 class APIKeyPool:
-    """Thread-safe pool that manages key rotation, cooldown, and status tracking."""
+    """Thread-safe pool that manages key rotation via round-robin, cooldown, and status tracking."""
     def __init__(self):
         self._lock = threading.Lock()
         self._keys: Dict[str, List[APIKey]] = {}
+        self._current_index: Dict[str, int] = {}
         self._initialize_pool()
 
     def _initialize_pool(self):
@@ -50,31 +53,44 @@ class APIKeyPool:
                 APIKey(value=key, alias=f"{group}_KEY_{i+1}")
                 for i, key in enumerate(raw_keys)
             ]
+            self._current_index[group] = 0
             logger.info(f"Initialized {len(self._keys[group])} keys for group '{group}'.")
 
     def get_available_key(self, group: str) -> APIKey:
         """
-        Retrieves the next available key for the given group.
-        Rotates selection using a simple linear scan of available keys.
+        Retrieves the next available key for the given group using round-robin.
+        If all keys are cooled down/disabled, raises AllKeysExhaustedException.
         """
         group = group.upper()
         with self._lock:
             if group not in self._keys or not self._keys[group]:
                 raise AllKeysExhaustedException(group)
 
-            for key in self._keys[group]:
+            keys = self._keys[group]
+            num_keys = len(keys)
+            start_index = self._current_index.get(group, 0)
+
+            # Try to find an available key starting from the last index (round-robin)
+            for i in range(num_keys):
+                candidate_idx = (start_index + i) % num_keys
+                key = keys[candidate_idx]
                 if key.is_available():
+                    # Move the pointer to the next key for subsequent calls
+                    self._current_index[group] = (candidate_idx + 1) % num_keys
+                    key.usage_count += 1
                     return key
 
             raise AllKeysExhaustedException(group)
 
     def report_rate_limit(self, key: APIKey, cooldown_seconds: Optional[int] = None):
-        """Marks a key as rate-limited and sets its cooldown period."""
+        """Marks a key as rate-limited, sets its cooldown period, and increments failure count."""
         seconds = cooldown_seconds if cooldown_seconds is not None else LLMConfig.API_KEY_COOLDOWN_SECONDS
         with self._lock:
             key.set_cooldown(seconds)
+            key.failure_count += 1
             logger.warning(
-                f"API Key {key.alias} was marked as rate-limited. Cooldown set for {seconds} seconds."
+                f"API Key {key.alias} was marked as rate-limited. Cooldown set for {seconds} seconds. "
+                f"Total failures: {key.failure_count}"
             )
 
     def report_success(self, key: APIKey):
@@ -86,6 +102,7 @@ class APIKeyPool:
         """Disables a key completely due to permanent errors (e.g., invalid token)."""
         with self._lock:
             key.is_active = False
+            key.failure_count += 1
             logger.error(f"API Key {key.alias} has been disabled due to fatal provider error.")
 
     def enable_key(self, key: APIKey):
