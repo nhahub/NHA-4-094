@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Literal, Optional, Dict, Any
 
 # Structured LLM Output Schemas
@@ -10,6 +10,16 @@ class QuizQuestionSchema(BaseModel):
     correct_answer: str = Field(description="The exact text of the correct option")
     explanation: str = Field(description="Step-by-step educational reason why this is correct")
     source_chunk_ids: List[str] = Field(description="Chunk IDs from the context used to construct this question")
+
+    @model_validator(mode="after")
+    def validate_mcq_properties(self) -> "QuizQuestionSchema":
+        if len(self.options) != 4:
+            raise ValueError("MCQ questions must have exactly 4 options.")
+        if self.correct_answer not in self.options:
+            raise ValueError(f"Correct answer '{self.correct_answer}' must be one of the options: {self.options}")
+        if not self.source_chunk_ids:
+            raise ValueError("source_chunk_ids should not be empty for generated questions.")
+        return self
 
 class QuizSchema(BaseModel):
     quiz_title: str = Field(description="Title of the quiz")
@@ -70,7 +80,10 @@ class SourceInfo(BaseModel):
 
 class LLMEngineerPayload(BaseModel):
     task_id: str
-    task_type: str
+    task_type: Literal[
+        "explain", "summary", "quiz_generation", "answer_evaluation", 
+        "chat_simple", "chat_answer", "quiz", "key_points", "comparison_table", "answer_table"
+    ]
     pipeline_type: str
     original_user_query: str
     task_query: Optional[str] = None

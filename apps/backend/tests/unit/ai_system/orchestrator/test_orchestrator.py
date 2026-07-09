@@ -24,8 +24,9 @@ def mock_db_and_memory():
          patch("app.db.repositories.chat_repository.save_message", new_callable=AsyncMock) as mock_save, \
          patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock) as mock_ctx, \
          patch("app.ai_system.orchestrator.pipeline_registry.store.save_message", new_callable=AsyncMock) as mock_store_save, \
-         patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock) as mock_sum:
-
+         patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock) as mock_sum, \
+         patch("app.ai_system.orchestrator.pipeline_registry.llm_generate", new_callable=AsyncMock) as mock_llm_gen:
+        
         mock_retrieve.return_value = RetrievalResult(
             status=RetrievalStatus.FOUND,
             confidence=0.9,
@@ -46,6 +47,55 @@ def mock_db_and_memory():
             recent_mistakes=[],
             relevant_past=[]
         )
+
+        async def mock_generate_side_effect(payload):
+            from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
+            if payload.task_type in ["quiz", "quiz_generation"]:
+                return LLMResponsePayload(
+                    task_id=payload.task_id,
+                    status="success",
+                    output_json={
+                        "quiz_title": "Photosynthesis Quiz",
+                        "difficulty": "medium",
+                        "questions": [
+                            {
+                                "question": "What is photosynthesis?",
+                                "type": "mcq",
+                                "options": ["Option A", "Option B", "Option C", "Option D"],
+                                "correct_answer": "Option A",
+                                "explanation": "Detailed explanation",
+                                "source_chunk_ids": ["chunk-abc"]
+                            }
+                        ]
+                    },
+                    source_chunk_ids=["chunk-abc"],
+                    usage_metrics=LLMUsageMetrics(
+                        provider="groq",
+                        model="llama-3.3-70b-versatile",
+                        key_alias="REASONING_KEY_1",
+                        input_tokens=150,
+                        output_tokens=100,
+                        total_tokens=250,
+                        latency_ms=180
+                    )
+                )
+            return LLMResponsePayload(
+                task_id=payload.task_id,
+                status="success",
+                output_text=f"Grounded response for {payload.task_type}.",
+                source_chunk_ids=["chunk-abc"],
+                usage_metrics=LLMUsageMetrics(
+                    provider="groq",
+                    model="llama-3.1-8b-instant",
+                    key_alias="FAST_KEY_1",
+                    input_tokens=100,
+                    output_tokens=50,
+                    total_tokens=150,
+                    latency_ms=120
+                )
+            )
+        
+        mock_llm_gen.side_effect = mock_generate_side_effect
         yield
 
 
@@ -69,10 +119,10 @@ async def test_orchestrator_single_success():
     assert len(response.tasks) == 1
     assert response.tasks[0].type == TaskType.SUMMARY
     assert response.tasks[0].status == "success"
-    assert response.tasks[0].metadata["mock"] is True
-    assert response.tasks[0].confidence == 0.5  # mock confidence
-    assert "Simulated educational answer output" in response.message
+    assert response.tasks[0].metadata["mock"] is False
+    assert "Grounded response for summary." in response.message
     assert len(response.citations) == 1
+    assert response.citations[0].chunk_id == "chunk-abc"
 
 
 @pytest.mark.asyncio
@@ -95,8 +145,11 @@ async def test_orchestrator_parallel_success():
     types = {t.type for t in response.tasks}
     assert TaskType.SUMMARY in types
     assert TaskType.QUIZ in types
-    # It will contain the merged text output
-    assert "Simulated educational answer output" in response.message
+    
+    # Assert headers exist in merged response message
+    assert "Summary" in response.message
+    assert "Quiz" in response.message
+    assert "Photosynthesis Quiz" in response.message
 
 
 @pytest.mark.asyncio
@@ -120,14 +173,12 @@ async def test_orchestrator_sequential_with_dependency():
     ans_task = next(t for t in response.tasks if t.type == TaskType.ANSWER_TABLE)
     assert ans_task.status == "success"
     assert ans_task.metadata["consumed_quiz_questions"] is True
-    # The default generated table check
-    assert "Answers Table" in ans_task.content or "Answers" in ans_task.content
+    assert "What is photosynthesis?" in ans_task.content
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_all_no_answer():
     orchestrator = TaskOrchestrator()
-    # Trigger no answer using "outside the file" keyword in query
     plan = ExecutionPlan(
         plan_id="plan-4",
         primary_intent=TaskType.SUMMARY,
@@ -148,7 +199,6 @@ async def test_orchestrator_all_no_answer():
 @pytest.mark.asyncio
 async def test_orchestrator_all_failed_raises_exception():
     orchestrator = TaskOrchestrator()
-    # Use unregistered task type to force failure
     plan = ExecutionPlan(
         plan_id="plan-5",
         primary_intent=TaskType.UNKNOWN,
@@ -166,7 +216,6 @@ async def test_orchestrator_all_failed_raises_exception():
 @pytest.mark.asyncio
 async def test_orchestrator_partial_failure():
     orchestrator = TaskOrchestrator()
-    # One succeeds, one fails (unregistered type)
     plan = ExecutionPlan(
         plan_id="plan-6",
         primary_intent=TaskType.SUMMARY,
@@ -180,5 +229,5 @@ async def test_orchestrator_partial_failure():
 
     response = await orchestrator.execute(plan, req)
     assert response.status == "partial"
-    assert "Simulated educational answer output" in response.message
-    assert response.confidence == 0.4
+    assert "Grounded response for summary." in response.message
+    assert response.confidence == 0.9

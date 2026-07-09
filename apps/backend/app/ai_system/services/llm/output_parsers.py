@@ -4,6 +4,7 @@ import logging
 from typing import Type, TypeVar
 from pydantic import BaseModel, ValidationError
 from .exceptions import JSONParsingException
+from .schemas import QuizSchema, AnswerEvaluationSchema
 
 logger = logging.getLogger(__name__)
 
@@ -59,3 +60,13 @@ class OutputParser:
         except ValidationError as e:
             logger.error(f"Pydantic validation failed: {str(e)}")
             raise JSONParsingException(raw_output, f"Validation Error: {str(e)}")
+
+    @classmethod
+    def parse_quiz(cls, raw_output: str) -> QuizSchema:
+        """Parses and validates output as a QuizSchema."""
+        return cls.parse_and_validate(raw_output, QuizSchema)
+
+    @classmethod
+    def parse_evaluation(cls, raw_output: str) -> AnswerEvaluationSchema:
+        """Parses and validates output as an AnswerEvaluationSchema."""
+        return cls.parse_and_validate(raw_output, AnswerEvaluationSchema)

@@ -65,15 +65,15 @@ def test_memory_contains_context_but_rag_returns_zero_chunks(
     assert data["status"] == "no_answer"
     assert data["message"] == "لم أجد إجابة واضحة في الملف المرفوع."
 
-
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock)
 @patch("app.db.repositories.chat_repository.save_message", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.store.save_message", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock)
+@patch("app.ai_system.orchestrator.pipeline_registry.llm_generate", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
 def test_memory_and_retrieval_combine_on_success(
-    mock_doc, mock_summarize, mock_store_save, mock_chat_save, mock_ctx, mock_retrieve
+    mock_doc, mock_llm_gen, mock_summarize, mock_store_save, mock_chat_save, mock_ctx, mock_retrieve
 ):
     """
     Positive-path integration test: when the retriever finds grounded chunks AND memory
@@ -81,6 +81,23 @@ def test_memory_and_retrieval_combine_on_success(
     (app.ai_system.retrieval) and memory (app.ai_system.memory) are wired together rather
     than operating independently.
     """
+    from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
+    mock_llm_gen.return_value = LLMResponsePayload(
+        task_id="t-1",
+        status="success",
+        output_text="Photosynthesis converts light energy into chemical energy.",
+        source_chunk_ids=["chunk-1"],
+        usage_metrics=LLMUsageMetrics(
+            provider="groq",
+            model="llama-3.1-8b-instant",
+            key_alias="FAST_KEY_1",
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            latency_ms=100
+        )
+    )
+
     mock_doc.return_value = {
         "id": "doc-plant-101",
         "user_id": "00000000-0000-0000-0000-000000000000",
