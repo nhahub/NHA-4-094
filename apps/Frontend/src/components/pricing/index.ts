@@ -1,0 +1,6 @@
+export { default as ComparisonTable } from "./ComparisonTable"
+export { default as FAQ } from "./FAQ"
+export { default as Hero } from "./Hero"
+export { default as PricingContent } from "./PricingContent"
+export { default as PricingCards } from "./PricingCards"
+export { default as TrustSection } from "./TrustSection"

@@ -1,0 +1,270 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --color-background: #000;
+  --color-text-primary: #EBEBEB;
+  --color-text-secondary: #8E8E8E;
+  --color-button: #C5C5C5;
+
+  --color-primary: #7333D2;
+  --color-secondary: #F853AE;
+
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 15px;
+}
+
+html,
+body{
+  @apply bg-background text-white
+}
+
+.dark {
+  --background: oklch(0.18 0.02 260); /* Deep navy #0b0e14 */
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.20 0.02 260);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.18 0.02 260);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.48 0.24 285); /* Purple accent */
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.26 0.02 260);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.26 0.02 260);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.26 0.02 260);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 5%);
+  --input: oklch(0.22 0.02 260); /* Filled input background */
+  --ring: oklch(0.48 0.24 285);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+h2 {
+  @apply max-sm:text-[25px] text-[35px] font-bold;
+}
+
+h3 {
+  @apply max-sm:text-[14px] text-[16px] font-bold;
+}
+
+p {
+  @apply max-sm:text-[16px] text-[18px];
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-150%) skewX(-25deg);
+  }
+  100% {
+    transform: translateX(150%) skewX(-25deg);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 4s infinite ease-in-out;
+}
+
+/* Tiptap Editor Styling */
+.tiptap {
+  outline: none;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  @apply text-text-secondary/70;
+  pointer-events: none;
+  height: 0;
+}
+.tiptap ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+.tiptap ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+.tiptap h1 {
+  font-size: 2.25rem;
+  font-weight: 800;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+.tiptap h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+.tiptap h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+.tiptap p {
+  margin-bottom: 0.75rem;
+  line-height: 1.625;
+}
+.tiptap blockquote {
+  border-left: 3px solid #7333d2;
+  padding-left: 1rem;
+  font-style: italic;
+  margin: 1rem 0;
+  color: #9ca3af;
+}
+.tiptap pre {
+  background: #111116;
+  border: 1px solid rgba(102, 101, 101, 0.8);
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-family: monospace;
+  margin: 1rem 0;
+}
+
+.tiptap hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 2.5rem 0;
+  cursor: pointer;
+}
+.tiptap .ProseMirror-selectednode {
+  background-color: rgba(46, 170, 220, 0.15);
+  border-radius: 4px;
+}
+.tiptap .multi-selected-block {
+  background-color: rgba(46, 170, 220, 0.15);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(46, 170, 220, 0.1);
+}
+.tiptap .multi-selected-block .multi-selected-block {
+  background-color: transparent;
+  box-shadow: none;
+}
+.tiptap .multi-selected-block ::selection {
+  background: transparent;
+}
+::selection {
+  background: rgba(46, 170, 220, 0.3);
+}
+
+/* Custom Scrollbar for dropdowns */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 99px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Tiptap Task List Styling */
+.tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+}
+.tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.tiptap ul[data-type="taskList"] li > label {
+  user-select: none;
+  margin-top: 0.25rem;
+}
+.tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
+  cursor: pointer;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  appearance: none;
+  background-color: transparent;
+  transition: all 0.2s ease;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tiptap ul[data-type="taskList"] li > label input[type="checkbox"]:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+.tiptap ul[data-type="taskList"] li > label input[type="checkbox"]:checked {
+  background-color: #8b5cf6;
+  border-color: #8b5cf6;
+}
+.tiptap ul[data-type="taskList"] li > label input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  width: 5px;
+  height: 10px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  margin-bottom: 2px;
+}
+.tiptap ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+.tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  color: #6b7280;
+}
+
+/* Tiptap Details (Toggle list) */
+.tiptap details {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.tiptap details summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: #e5e7eb;
+}
+.tiptap details[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+/* Editor block spacing */
+.tiptap p {
+  margin-bottom: 0.4rem;
+  margin-top: 0.2rem;
+}
+.tiptap li p {
+  margin-bottom: 0;
+  margin-top: 0;
+}
+
