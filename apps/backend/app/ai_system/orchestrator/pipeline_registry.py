@@ -1,9 +1,18 @@
 import json
 import logging
+import hashlib
+import uuid
+import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from pydantic import BaseModel, Field
 
 from app.schemas.ai_schema import Task, TaskResult, Citation, TaskType, VerificationPolicy, OutputFormat
+from app.db.supabase_client import get_supabase_client
+from app.ai_system.services.llm.model_router import resolve_config_for_role, LLMRole
+from app.ai_system.services.llm.providers.groq_provider import GroqProvider
+from app.ai_system.services.llm.exceptions import ContextMissingException
+from app.core.config import settings
 from app.ai_system.orchestrator.constants import (
     TASK_CHAT_ANSWER,
     TASK_EXPLAIN,
@@ -22,6 +31,7 @@ from app.ai_system.memory import (
     MemoryStore, ChatMessage, Summarizer
 )
 from app.ai_system.services.llm.generate import generate as llm_generate
+from app.ai_system.services.llm.config import LLMConfig
 from app.ai_system.services.llm.schemas import (
     LLMEngineerPayload, SourceInfo, StrictGroundingPolicy,
     ExpectedLLMOutputFormat, ChunkContext, MemoryContext
@@ -40,10 +50,74 @@ store = MemoryStore()
 summarizer = Summarizer()
 document_retriever = get_document_retriever()
 
+def _format_recent_messages(memory_context) -> str:
+    """Format recent session messages from MemoryContext into a compact history string for the LLM prompt."""
+    messages = getattr(memory_context, "recent_messages", None)
+    if not messages:
+        return ""
+    lines = []
+    for m in messages:
+        role = getattr(m, "role", "user")
+        content = getattr(m, "content", "")
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
 def check_no_answer_trigger(query: str) -> bool:
+
     """Checks if query simulates requesting information outside the document context."""
     normalized = query.lower()
     return "خارج الملف" in normalized or "outside the file" in normalized
+
+STOPWORDS = {"a", "an", "the", "about", "on", "in", "of", "to", "for", "and", "or", "is", "are"}
+
+def build_citations(retrieved_chunks: List[Any], llm_output: str, source_chunk_ids: Optional[List[str]] = None) -> List[Citation]:
+    """
+    Constructs citations referencing only the retrieved chunks that are actually
+    relevant or cited in the LLM response text, using the validation package's citation builder.
+    """
+    from app.ai_system.validation.citation_builder import build_citations as val_build_citations
+    from app.ai_system.validation.schemas import RetrievedChunk as ValRetrievedChunk
+    from app.schemas.ai_schema import Citation
+    
+    if not retrieved_chunks or not llm_output:
+        return []
+        
+    val_chunks = []
+    for c in retrieved_chunks:
+        c_id = c.chunk_id if hasattr(c, "chunk_id") else c.get("id") or c.get("chunk_id")
+        text = c.text if hasattr(c, "text") else c.get("content", "")
+        page = c.page_number if hasattr(c, "page_number") else c.get("page_start", 1)
+        section = c.section_title if hasattr(c, "section_title") else c.get("section_title")
+        score = c.score if hasattr(c, "score") else c.get("score", 0.90)
+        
+        val_chunks.append(ValRetrievedChunk(
+            chunk_id=str(c_id),
+            text=text,
+            page_number=page,
+            section_title=section,
+            similarity_score=score
+        ))
+
+    if source_chunk_ids:
+        source_chunk_ids_set = {str(sid) for sid in source_chunk_ids}
+        filtered_val_chunks = [vc for vc in val_chunks if vc.chunk_id in source_chunk_ids_set]
+        if filtered_val_chunks:
+            val_chunks = filtered_val_chunks
+
+    build_result = val_build_citations(llm_output, val_chunks)
+    
+    citations = []
+    for cit in build_result.citations:
+        citations.append(Citation(
+            chunk_id=cit.chunk_id,
+            page_number=cit.page_number or 1,
+            section_title=cit.section_title or "RAG Pipeline",
+            score=cit.relevance_score or 0.9
+        ))
+        
+    return citations
+
 
 async def execute_common_pipeline_steps(
     task: Task,
@@ -66,6 +140,8 @@ async def execute_common_pipeline_steps(
     10. Run rolling session summaries
     """
     # 1. Check intent triggers
+    is_mock = not LLMConfig.fast_keys()
+
     if check_no_answer_trigger(task.query):
         return TaskResult(
             task_id=task.task_id,
@@ -74,7 +150,7 @@ async def execute_common_pipeline_steps(
             content=NO_ANSWER_FALLBACK,
             citations=[],
             confidence=0.0,
-            metadata={"mock": False, "retrieval_mode": "temporary_chunk_context_until_rag"}
+            metadata={"mock": is_mock, "retrieval_mode": "temporary_chunk_context_until_rag"}
         )
 
     user_id = getattr(request, "user_id", "00000000-0000-0000-0000-000000000000")
@@ -95,6 +171,12 @@ async def execute_common_pipeline_steps(
         
         # 3. Check for empty/unusable RAG context -> strict grounding fallback
         if retrieval_result.status != RetrievalStatus.FOUND:
+            if hasattr(request, "_trace_stages"):
+                request._trace_stages.append({
+                    "stage": "retriever",
+                    "status": "failed",
+                    "chunks_found": 0
+                })
             return TaskResult(
                 task_id=task.task_id,
                 type=task_type,
@@ -102,7 +184,7 @@ async def execute_common_pipeline_steps(
                 content=NO_ANSWER_FALLBACK,
                 citations=[],
                 confidence=0.0,
-                metadata={"mock": False, "retrieval_status": retrieval_result.status.value}
+                metadata={"mock": is_mock, "retrieval_status": retrieval_result.status.value}
             )
             
         chunks = [
@@ -113,8 +195,20 @@ async def execute_common_pipeline_steps(
             }
             for c in retrieval_result.chunks
         ]
+        if hasattr(request, "_trace_stages"):
+            request._trace_stages.append({
+                "stage": "retriever",
+                "status": "passed",
+                "chunks_found": len(chunks)
+            })
     elif task.retrieval_required:
         # Retrieval is required but document_id is missing
+        if hasattr(request, "_trace_stages"):
+            request._trace_stages.append({
+                "stage": "retriever",
+                "status": "failed",
+                "chunks_found": 0
+            })
         return TaskResult(
             task_id=task.task_id,
             type=task_type,
@@ -122,8 +216,15 @@ async def execute_common_pipeline_steps(
             content=NO_ANSWER_FALLBACK,
             citations=[],
             confidence=0.0,
-            metadata={"mock": True, "error": "Missing document_id context."}
+            metadata={"mock": is_mock, "error": "Missing document_id context."}
         )
+    else:
+        if hasattr(request, "_trace_stages"):
+            request._trace_stages.append({
+                "stage": "retriever",
+                "status": "passed",
+                "chunks_found": 0
+            })
 
     # 4. Save user message to chat database
     user_msg = ChatMessage(
@@ -140,6 +241,8 @@ async def execute_common_pipeline_steps(
         user_id=user_id,
         session_id=session_id,
         source_id=document_id,
+        source_type="document",
+        user_query=task.query
     )
 
     # 6. Temporary context selection
@@ -175,6 +278,7 @@ async def execute_common_pipeline_steps(
         logger.info(f"Using precomputed content for task {task.task_id} (type: {task_type})")
         source_chunk_ids = [c.chunk_id for c in retrieved_context[:3]]
         verification_trace = {"status": "skipped", "retries": 0}
+        citations = build_citations(retrieval_result.chunks if retrieval_result else [], pre_generated_content, source_chunk_ids)
     else:
         # Build LLMEngineerPayload
         output_type = "text"
@@ -196,8 +300,10 @@ async def execute_common_pipeline_steps(
 
         memory_payload = MemoryContext(
             quiz_difficulty=getattr(request, "difficulty", "medium"),
-            preferred_language=lang
+            preferred_language=lang,
+            recent_context_summary=_format_recent_messages(memory_context)
         )
+
 
         payload = LLMEngineerPayload(
             task_id=task.task_id,
@@ -218,6 +324,9 @@ async def execute_common_pipeline_steps(
 
         policy = getattr(request, "verification_policy", None) or VerificationPolicy()
         verification_passed = False
+        verification_trace = {}
+        citations = []
+        verification = None
         
         for attempt in range(policy.max_retries + 1):
             if attempt > 0:
@@ -227,17 +336,56 @@ async def execute_common_pipeline_steps(
                 )
             
             try:
-                llm_response = await llm_generate(payload)
+                is_map_reduce = False
+                if task_type in [TaskType.SUMMARY, TaskType.QUIZ]:
+                    total_chars = sum(len(c.get("content", "")) for c in chunks)
+                    if (total_chars // 3) > 3000:
+                        is_map_reduce = True
+
+                if is_map_reduce:
+                    # 1. Map Phase
+                    map_payload = payload.model_copy()
+                    if task_type == TaskType.SUMMARY:
+                        map_payload.task_type = "summary_map"
+                    elif task_type == TaskType.QUIZ:
+                        map_payload.task_type = "quiz"
+                    
+                    map_response = await llm_generate(map_payload)
+                    if map_response.status == "failure":
+                        verification_trace = {"status": "error", "error": map_response.error_message, "retries": attempt}
+                        continue
+                    
+                    # 2. Reduce Phase
+                    reduce_payload = payload.model_copy()
+                    if task_type == TaskType.SUMMARY:
+                        reduce_payload.task_type = "summary_reduce"
+                    elif task_type == TaskType.QUIZ:
+                        reduce_payload.task_type = "quiz"
+                    
+                    map_text = map_response.output_text or (json.dumps(map_response.output_json) if map_response.output_json else "")
+                    reduce_payload.task_query = f"Synthesize/reduce the following content:\n{map_text}"
+                    reduce_payload.retrieved_document_context = []
+                    
+                    llm_response = await llm_generate(reduce_payload)
+                else:
+                    llm_response = await llm_generate(payload)
+
                 if llm_response.status == "failure":
                     verification_trace = {"status": "error", "error": llm_response.error_message, "retries": attempt}
                     continue
                 
                 # Check verification
-                raw_response = llm_response.output_text or json.dumps(llm_response.output_json, ensure_ascii=False) if llm_response.output_json else ""
+                raw_response = llm_response.output_text if llm_response.output_text is not None else (json.dumps(llm_response.output_json, ensure_ascii=False) if llm_response.output_json else "")
+                
+                citations = build_citations(retrieval_result.chunks if retrieval_result else [], raw_response, llm_response.source_chunk_ids)
                 
                 verification = await default_verifier_client.verify(
-                    context=retrieval_result.context_text if retrieval_result else "",
-                    response=raw_response,
+                    user_query=task.query,
+                    intent=task_type.value,
+                    retrieved_chunks=chunks,
+                    llm_output=raw_response,
+                    output_format=task.output_format.value if hasattr(task.output_format, 'value') else str(task.output_format),
+                    citations=citations,
                     policy=policy
                 )
                 
@@ -254,9 +402,21 @@ async def execute_common_pipeline_steps(
                     verification_passed = True
                     break
             except Exception as e:
+                logger.error(f"PIPELINE RUNTIME EXCEPTION: {e}", exc_info=True)
                 verification_trace = {"status": "error", "error": str(e), "retries": attempt}
 
         if not verification_passed:
+            if hasattr(request, "_trace_stages"):
+                request._trace_stages.append({
+                    "stage": "executor",
+                    "model": "groq",
+                    "status": "failed"
+                })
+                request._trace_stages.append({
+                    "stage": "verifier",
+                    "passed": False,
+                    "grounding_score": 0.0
+                })
             return TaskResult(
                 task_id=task.task_id,
                 type=task_type,
@@ -265,7 +425,7 @@ async def execute_common_pipeline_steps(
                 citations=[],
                 confidence=0.0,
                 metadata={
-                    "mock": False,
+                    "mock": is_mock,
                     "error": "Verification failed, fallback triggered.",
                     "verification": verification_trace
                 }
@@ -278,6 +438,19 @@ async def execute_common_pipeline_steps(
         
         source_chunk_ids = llm_response.source_chunk_ids
         usage_metrics = llm_response.usage_metrics.model_dump() if llm_response.usage_metrics else None
+
+    # Log executor and verifier trace stages
+    if hasattr(request, "_trace_stages"):
+        request._trace_stages.append({
+            "stage": "executor",
+            "model": "groq",
+            "status": "completed"
+        })
+        request._trace_stages.append({
+            "stage": "verifier",
+            "passed": verification_passed,
+            "grounding_score": verification_trace.get("grounding_score", 1.0)
+        })
 
     # 8. Apply personalization adapt
     if memory_context:
@@ -303,14 +476,19 @@ async def execute_common_pipeline_steps(
         source_chunk_id=source_chunk_id
     )
 
+    # Log save chat state and citations trace stages
+    if hasattr(request, "_trace_stages"):
+        request._trace_stages.append({
+            "stage": "citations",
+            "count": len(citations)
+        })
+        request._trace_stages.append({
+            "stage": "save_chat_state",
+            "status": "completed"
+        })
+
     # 10. Rolling summarizer threshold check
     await summarizer.summarize_session(user_id, session_id, force=False)
-
-    # Build response citations
-    citations = [
-        Citation(chunk_id=cid, page_number=chunk_page_map.get(cid, 1), score=0.9)
-        for cid in source_chunk_ids
-    ]
 
     retrieval_info = {
         "status": retrieval_result.status.value if retrieval_result else "not_run",
@@ -335,7 +513,7 @@ async def execute_common_pipeline_steps(
 
     # Quiz questions caching for answer table consumption
     metadata = {
-        "mock": False,
+        "mock": is_mock,
         "document_id": document_id,
         "retrieved_chunks_count": len(retrieved_chunk_ids),
         "memory_info": memory_info,
@@ -356,13 +534,14 @@ async def execute_common_pipeline_steps(
             })
         metadata["generated_questions"] = result_questions
 
+    task_confidence = verification.confidence if (pre_generated_content is None and 'verification' in locals() and verification is not None) else MOCK_CONFIDENCE
     return TaskResult(
         task_id=task.task_id,
         type=task_type,
         status="success" if content_result != NO_ANSWER_FALLBACK else "no_answer",
         content=content_result,
         citations=citations,
-        confidence=MOCK_CONFIDENCE,
+        confidence=task_confidence,
         metadata=metadata
     )
 
@@ -375,45 +554,549 @@ async def run_explain_pipeline(task: Task, request: Any, previous_results: Optio
     """Explanation pipeline for a targeted segment."""
     return await execute_common_pipeline_steps(task, request, TaskType.EXPLAIN, previous_results)
 
+class MCQQuestion(BaseModel):
+    question_text: str = Field(..., description="The multiple choice question text in the target language.")
+    options: List[str] = Field(..., description="Exactly 4 options.")
+    correct_option_id: int = Field(..., description="Index of correct option (0 to 3).")
+    explanation: str = Field(..., description="Detailed explanation of the correct answer.")
+    concept: str = Field(..., description="The main concept tested by this question.")
+    difficulty: str = Field(..., description="Difficulty level: 'easy', 'medium', 'hard'.")
+
+class QuizData(BaseModel):
+    title: str = Field(..., description="Quiz title.")
+    questions: List[MCQQuestion]
+
+
 async def run_summary_pipeline(task: Task, request: Any, previous_results: Optional[Dict[str, Any]] = None) -> TaskResult:
-    """Document-level summary utilizing all chunks."""
-    return await execute_common_pipeline_steps(task, request, TaskType.SUMMARY, previous_results)
+    """Document-level summary utilizing Map-Reduce and cache indexing."""
+    user_id = getattr(request, "user_id", None)
+    document_id = getattr(request, "document_id", None)
+    lang = getattr(request, "language", "ar")
+    
+    if not document_id:
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.SUMMARY,
+            status="no_answer",
+            content="Missing document context.",
+            citations=[],
+            confidence=0.0
+        )
+
+    summary_size = task.metadata.get("summary_size") or getattr(request, "summary_size", None) or "medium"
+    summary_size = summary_size.lower().strip()
+    target_word_count = task.metadata.get("target_word_count") or getattr(request, "target_word_count", None)
+
+    # 1. Fetch all chunks
+    supabase = get_supabase_client()
+    resp = supabase.table("document_chunks")\
+                   .select("id, content, page_start, chunk_index")\
+                   .eq("document_id", document_id)\
+                   .order("chunk_index")\
+                   .execute()
+    chunks = resp.data if resp and resp.data else []
+    if not chunks:
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.SUMMARY,
+            status="no_answer",
+            content=NO_ANSWER_FALLBACK if lang == "ar" else "I could not find a clear answer in the uploaded file.",
+            citations=[],
+            confidence=0.0
+        )
+
+    # 2. Compute document hash and config hash
+    doc_text_concat = "".join(c.get("content", "") for c in chunks)
+    document_hash = hashlib.sha256(doc_text_concat.encode("utf-8")).hexdigest()
+    
+    _, model_name = resolve_config_for_role(LLMRole.MAP_WORKER)
+    config_hash = hashlib.sha256(f"model={model_name};temp=0.1;size={summary_size};words={target_word_count}".encode("utf-8")).hexdigest()
+
+    # 3. Check Cache
+    cache_resp = supabase.table("document_summaries")\
+                         .select("*")\
+                         .eq("document_id", document_id)\
+                         .eq("user_id", user_id)\
+                         .eq("summary_size", summary_size)\
+                         .eq("language", lang)\
+                         .eq("generation_config_hash", config_hash)\
+                         .execute()
+    if cache_resp.data:
+        cached = cache_resp.data[0]
+        if cached["summary_status"] == "completed":
+            logger.info("Summary Cache HIT!")
+            return TaskResult(
+                task_id=task.task_id,
+                type=TaskType.SUMMARY,
+                status="success",
+                content=cached["content"],
+                citations=cached.get("citations") or [],
+                confidence=0.95,
+                metadata={"cache_hit": True, "document_id": document_id}
+            )
+
+    # Create pending cache row
+    cache_id = str(uuid.uuid4())
+    supabase.table("document_summaries").insert({
+        "id": cache_id,
+        "user_id": user_id,
+        "document_id": document_id,
+        "summary_size": summary_size,
+        "target_word_count": target_word_count,
+        "content": "Processing summary...",
+        "language": lang,
+        "document_hash": document_hash,
+        "prompt_version": "v1",
+        "model_name": model_name,
+        "summary_status": "pending",
+        "generation_config_hash": config_hash
+    }).execute()
+
+    # 4. Map-Reduce Summary Flow
+    try:
+        # Update to processing state
+        supabase.table("document_summaries").update({"summary_status": "processing"}).eq("id", cache_id).execute()
+
+        # Group chunks into blocks of ~1500 words
+        blocks = []
+        current_block = []
+        current_word_count = 0
+        for c in chunks:
+            c_text = c.get("content", "")
+            words = len(c_text.split())
+            if current_word_count + words > 1500 and current_block:
+                blocks.append(current_block)
+                current_block = [c]
+                current_word_count = words
+            else:
+                current_block.append(c)
+                current_word_count += words
+        if current_block:
+            blocks.append(current_block)
+
+        provider = GroqProvider()
+
+        async def process_block(block_chunks: list, depth: int = 0) -> str:
+            api_key, model_name = resolve_config_for_role(LLMRole.MAP_WORKER)
+            block_text = "\n".join(c.get("content", "") for c in block_chunks)
+            system_prompt = (
+                "You are a Map-Reduce summary worker. Summarize the following document section, "
+                "highlighting key concepts, facts, names, and timeline dates. Keep it factual and concise."
+            )
+            prompt = f"Section text:\n{block_text}\nSummary:"
+            
+            for trial in range(3): # up to 2 retries
+                try:
+                    res = await provider.generate(
+                        model=model_name,
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        api_key=api_key,
+                        profile="memory_map",
+                        temperature=0.1
+                    )
+                    return res["text"]
+                except Exception as e:
+                    logger.warning(f"Map block execution failed (trial {trial}, depth {depth}): {e}")
+                    if trial == 2:
+                        # Split block in half
+                        if len(block_chunks) > 1 and depth < 2:
+                            mid = len(block_chunks) // 2
+                            left = block_chunks[:mid]
+                            right = block_chunks[mid:]
+                            try:
+                                left_res, right_res = await asyncio.gather(
+                                    process_block(left, depth+1),
+                                    process_block(right, depth+1)
+                                )
+                                return f"{left_res}\n\n{right_res}"
+                            except Exception as gather_exc:
+                                logger.error(f"Hierarchical block split execution failed: {gather_exc}")
+                        
+                        # Fallback to default config key
+                        try:
+                            fallback_key = settings.GROQ_DEFAULT_API_KEY.strip()
+                            fallback_model = settings.GROQ_DEFAULT_MODEL.strip()
+                            if fallback_key and fallback_model:
+                                res = await provider.generate(
+                                    model=fallback_model,
+                                    prompt=prompt,
+                                    system_prompt=system_prompt,
+                                    api_key=fallback_key,
+                                    profile="memory_map",
+                                    temperature=0.1
+                                )
+                                return res["text"]
+                        except Exception as fallback_exc:
+                            logger.error(f"Fallback model execution failed: {fallback_exc}")
+                        
+                        return f"[Warning: Partial summary content mapping failed for this section.]"
+            return ""
+
+        map_summaries = await asyncio.gather(*(process_block(b) for b in blocks))
+        combined_map_text = "\n\n=== SECTION SUMMARY ===\n\n".join(map_summaries)
+
+        # Reduce Phase
+        api_key, model_name = resolve_config_for_role(LLMRole.REDUCE_WORKER)
+        
+        size_targets = {
+            "concise": 200,
+            "medium": 500,
+            "detailed": 1200,
+            "custom": target_word_count or 100
+        }
+        target = size_targets.get(summary_size, 500)
+
+        system_prompt = (
+            f"You are a Map-Reduce summary reducer. Synthesize the section summaries into a single comprehensive, "
+            f"structured document summary. Format with markdown headings. Target length: approximately {target} words."
+        )
+        prompt = f"Section summaries:\n{combined_map_text}\nReduced Summary:"
+
+        res = await provider.generate(
+            model=model_name,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            api_key=api_key,
+            profile="execution_reduce",
+            temperature=0.2
+        )
+        summary_text = res["text"]
+        actual_word_count = len(summary_text.split())
+
+        # Save to cache
+        supabase.table("document_summaries").update({
+            "content": summary_text,
+            "summary_status": "completed",
+            "actual_word_count": actual_word_count
+        }).eq("id", cache_id).execute()
+
+        # Build citations trace
+        citations = []
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.SUMMARY,
+            status="success",
+            content=summary_text,
+            citations=citations,
+            confidence=0.95,
+            metadata={"cache_hit": False, "document_id": document_id}
+        )
+
+    except Exception as e:
+        logger.error(f"Summary Map-Reduce failed: {e}", exc_info=True)
+        supabase.table("document_summaries").update({
+            "summary_status": "failed",
+            "failure_metadata": {"error": str(e)}
+        }).eq("id", cache_id).execute()
+        
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.SUMMARY,
+            status="no_answer",
+            content=NO_ANSWER_FALLBACK if lang == "ar" else "I could not find a clear answer in the uploaded file.",
+            citations=[],
+            confidence=0.0,
+            error=str(e)
+        )
+
 
 async def run_quiz_pipeline(task: Task, request: Any, previous_results: Optional[Dict[str, Any]] = None) -> TaskResult:
-    """Document-level quiz generator utilizing all chunks."""
-    result = await execute_common_pipeline_steps(task, request, TaskType.QUIZ, previous_results)
-    
-    # Parse generated questions to inject into metadata for downstream tasks
-    if result.status == "success":
-        if result.metadata and "generated_questions" in result.metadata:
-            return result
+    """Document-level quiz utilizing Map-Reduce and separated secure database answers."""
+    user_id = getattr(request, "user_id", None)
+    document_id = getattr(request, "document_id", None)
+    lang = getattr(request, "language", "ar")
 
-        import json
-        try:
-            data_content = json.loads(result.content)
-            if isinstance(data_content, dict) and "questions" in data_content:
-                questions_list = data_content["questions"]
-            else:
-                questions_list = data_content
+    if not document_id:
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.QUIZ,
+            status="no_answer",
+            content="Missing document context.",
+            citations=[],
+            confidence=0.0
+        )
+
+    difficulty = (task.metadata.get("difficulty") or getattr(request, "difficulty", None) or "medium").lower()
+    num_questions = task.metadata.get("number_of_questions") or getattr(request, "number_of_questions", None) or 5
+    
+    size = "medium"
+    if num_questions <= 3:
+        size = "small"
+    elif num_questions >= 8:
+        size = "large"
+
+    supabase = get_supabase_client()
+
+    # 1. Check cache database
+    quiz_resp = supabase.table("quizzes")\
+                        .select("*")\
+                        .eq("document_id", document_id)\
+                        .eq("user_id", user_id)\
+                        .eq("difficulty", difficulty)\
+                        .eq("size", size)\
+                        .execute()
+    if quiz_resp.data:
+        quiz_id = quiz_resp.data[0]["id"]
+        title = quiz_resp.data[0]["title"]
+        
+        # Load questions
+        q_resp = supabase.table("quiz_questions")\
+                         .select("*")\
+                         .eq("quiz_id", quiz_id)\
+                         .execute()
+                         
+        # Load correct answers (trusted backend can SELECT)
+        a_resp = supabase.table("quiz_question_answers")\
+                         .select("*")\
+                         .in_("question_id", [q["id"] for q in q_resp.data])\
+                         .execute()
+        ans_map = {a["question_id"]: a for a in a_resp.data}
+        
+        mapped_questions = []
+        for q in q_resp.data:
+            ans = ans_map.get(q["id"], {})
+            correct_idx = ans.get("correct_option_id", 0)
+            correct_text = q["options"][correct_idx] if q["options"] else ""
+            mapped_questions.append({
+                "id": q["id"],
+                "question": q["question_text"],
+                "options": q["options"],
+                "correct": correct_text
+            })
             
-            # Map questions to correct keys if needed
-            mapped = []
-            for q in questions_list:
-                mapped.append({
-                    "id": q.get("id", "q1"),
-                    "question": q.get("question"),
-                    "options": q.get("options"),
-                    "correct": q.get("correct") or q.get("correct_answer")
-                })
-            result.metadata["generated_questions"] = mapped
-        except Exception:
-            # Fallback if content was personalized into raw text
-            lang = getattr(request, "language", "ar")
-            result.metadata["generated_questions"] = [
-                {"id": "q1", "question": "ما عاصمة مصر؟" if lang == "ar" else "What is the capital of Egypt?", "options": ["القاهرة", "الإسكندرية"] if lang == "ar" else ["Cairo", "Alexandria"], "correct": "القاهرة" if lang == "ar" else "Cairo"},
-                {"id": "q2", "question": "ما الصيغة الكيميائية للماء؟" if lang == "ar" else "What is the chemical formula of water?", "options": ["H2O", "CO2"], "correct": "H2O"}
-            ]
-    return result
+        public_questions = [
+            {
+                "id": q["id"],
+                "question": q["question_text"],
+                "options": q["options"],
+                "difficulty": q["difficulty"],
+                "concept": q["concept"]
+            } for q in q_resp.data
+        ]
+        
+        public_content = json.dumps({
+            "quiz_id": quiz_id,
+            "title": title,
+            "questions": public_questions
+        }, ensure_ascii=False)
+        
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.QUIZ,
+            status="success",
+            content=public_content,
+            citations=[],
+            confidence=0.95,
+            metadata={"generated_questions": mapped_questions, "quiz_id": quiz_id}
+        )
+
+    # 2. Fetch chunks
+    resp = supabase.table("document_chunks")\
+                   .select("id, content, page_start, chunk_index")\
+                   .eq("document_id", document_id)\
+                   .order("chunk_index")\
+                   .execute()
+    chunks = resp.data if resp and resp.data else []
+    if not chunks:
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.QUIZ,
+            status="no_answer",
+            content=NO_ANSWER_FALLBACK if lang == "ar" else "I could not find a clear answer in the uploaded file.",
+            citations=[],
+            confidence=0.0
+        )
+
+    # 3. Map-Reduce Quiz Generation
+    try:
+        blocks = []
+        current_block = []
+        current_word_count = 0
+        for c in chunks:
+            c_text = c.get("content", "")
+            words = len(c_text.split())
+            if current_word_count + words > 1500 and current_block:
+                blocks.append(current_block)
+                current_block = [c]
+                current_word_count = words
+            else:
+                current_block.append(c)
+                current_word_count += words
+        if current_block:
+            blocks.append(current_block)
+
+        provider = GroqProvider()
+
+        async def process_quiz_block(block_chunks: list, depth: int = 0) -> str:
+            api_key, model_name = resolve_config_for_role(LLMRole.MAP_WORKER)
+            block_text = "\n".join(c.get("content", "") for c in block_chunks)
+            system_prompt = (
+                "You are a quiz map worker. Analyze this document section and extract all important "
+                "educational facts, definitions, formulas, or concepts that are suitable for testing."
+            )
+            prompt = f"Section text:\n{block_text}\nExtracted Facts:"
+            
+            for trial in range(3):
+                try:
+                    res = await provider.generate(
+                        model=model_name,
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        api_key=api_key,
+                        profile="memory_map",
+                        temperature=0.1
+                    )
+                    return res["text"]
+                except Exception as e:
+                    if trial == 2:
+                        if len(block_chunks) > 1 and depth < 2:
+                            mid = len(block_chunks) // 2
+                            left = block_chunks[:mid]
+                            right = block_chunks[mid:]
+                            try:
+                                left_res, right_res = await asyncio.gather(
+                                    process_quiz_block(left, depth+1),
+                                    process_quiz_block(right, depth+1)
+                                )
+                                return f"{left_res}\n\n{right_res}"
+                            except Exception:
+                                pass
+                        try:
+                            fallback_key = settings.GROQ_DEFAULT_API_KEY.strip()
+                            fallback_model = settings.GROQ_DEFAULT_MODEL.strip()
+                            if fallback_key and fallback_model:
+                                res = await provider.generate(
+                                    model=fallback_model,
+                                    prompt=prompt,
+                                    system_prompt=system_prompt,
+                                    api_key=fallback_key,
+                                    profile="memory_map",
+                                    temperature=0.1
+                                )
+                                return res["text"]
+                        except Exception:
+                            pass
+                        return ""
+            return ""
+
+        map_facts = await asyncio.gather(*(process_quiz_block(b) for b in blocks))
+        combined_facts = "\n\n".join(f for f in map_facts if f)
+
+        # Generate Quiz
+        api_key, model_name = resolve_config_for_role(LLMRole.QUIZ_GENERATOR)
+
+        system_prompt = (
+            f"You are a professional quiz generator. Analyze the extracted facts and generate a structured "
+            f"quiz in {lang.upper()}. The quiz must contain exactly {num_questions} multiple choice questions, "
+            f"conforming to difficulty: '{difficulty}'.\n\n"
+            f"You must strictly output the JSON structure conforming to the following schema, without wrapping it under a top-level key:\n"
+            f"{{\n"
+            f"  \"title\": \"A concise title for the quiz\",\n"
+            f"  \"questions\": [\n"
+            f"    {{\n"
+            f"      \"question_text\": \"The question text.\",\n"
+            f"      \"options\": [\"Option A\", \"Option B\", \"Option C\", \"Option D\"],\n"
+            f"      \"correct_option_id\": 0,\n"
+            f"      \"explanation\": \"Detailed explanation of the correct option.\",\n"
+            f"      \"concept\": \"Educational concept tested.\",\n"
+            f"      \"difficulty\": \"{difficulty}\"\n"
+            f"    }}\n"
+            f"  ]\n"
+            f"}}"
+        )
+        prompt = f"Extracted facts from document:\n{combined_facts}\nGenerate Quiz JSON:"
+
+        quiz_data = await provider.generate_structured(
+            model=model_name,
+            prompt=prompt,
+            response_model=QuizData,
+            system_prompt=system_prompt,
+            api_key=api_key,
+            profile="quiz",
+            temperature=0.3
+        )
+
+        # 4. Save Quiz to Database (using transactional insert)
+        quiz_id = str(uuid.uuid4())
+        supabase.table("quizzes").insert({
+            "id": quiz_id,
+            "user_id": user_id,
+            "document_id": document_id,
+            "title": quiz_data.title,
+            "difficulty": difficulty,
+            "size": size
+        }).execute()
+
+        questions_to_insert = []
+        answers_to_insert = []
+        mapped_questions = []
+
+        for idx, mcq in enumerate(quiz_data.questions):
+            q_id = str(uuid.uuid4())
+            questions_to_insert.append({
+                "id": q_id,
+                "quiz_id": quiz_id,
+                "question_text": mcq.question_text,
+                "options": mcq.options,
+                "difficulty": difficulty,
+                "concept": mcq.concept
+            })
+            answers_to_insert.append({
+                "question_id": q_id,
+                "correct_option_id": mcq.correct_option_id,
+                "explanation": mcq.explanation
+            })
+            correct_text = mcq.options[mcq.correct_option_id]
+            mapped_questions.append({
+                "id": q_id,
+                "question": mcq.question_text,
+                "options": mcq.options,
+                "correct": correct_text
+            })
+
+        supabase.table("quiz_questions").insert(questions_to_insert).execute()
+        supabase.table("quiz_question_answers").insert(answers_to_insert).execute()
+
+        # Build public content to return
+        public_questions = [
+            {
+                "id": q["id"],
+                "question": q["question_text"],
+                "question_text": q["question_text"],
+                "options": q["options"],
+                "difficulty": q["difficulty"],
+                "concept": q["concept"]
+            } for q in questions_to_insert
+        ]
+        
+        public_content = json.dumps({
+            "quiz_id": quiz_id,
+            "title": quiz_data.title,
+            "questions": public_questions
+        }, ensure_ascii=False)
+
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.QUIZ,
+            status="success",
+            content=public_content,
+            citations=[],
+            confidence=0.95,
+            metadata={"generated_questions": mapped_questions, "quiz_id": quiz_id}
+        )
+
+    except Exception as e:
+        logger.error(f"Quiz Map-Reduce failed: {e}", exc_info=True)
+        return TaskResult(
+            task_id=task.task_id,
+            type=TaskType.QUIZ,
+            status="no_answer",
+            content=NO_ANSWER_FALLBACK if lang == "ar" else "I could not find a clear answer in the uploaded file.",
+            citations=[],
+            confidence=0.0,
+            error=str(e)
+        )
 
 async def run_answer_table_pipeline(task: Task, request: Any, previous_results: Optional[Dict[str, Any]] = None) -> TaskResult:
     """Generates an answer table based on previous quiz questions."""

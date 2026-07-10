@@ -136,8 +136,11 @@ class TaskOrchestrator:
             # Inject optional parameters from task metadata to request
             if task.metadata:
                 for k, v in task.metadata.items():
-                    if not hasattr(request, k) or getattr(request, k) is None:
-                        setattr(request, k, v)
+                    try:
+                        if not hasattr(request, k) or getattr(request, k) is None:
+                            setattr(request, k, v)
+                    except Exception:
+                        pass
 
             return await pipeline_fn(task, request, previous_results)
         except Exception as e:
@@ -354,13 +357,19 @@ class TaskOrchestrator:
         else:
             merged_message = NO_ANSWER_FALLBACK
 
+        # Calculate dynamic merged confidence score from successful tasks
+        if successful_tasks:
+            merged_confidence = sum(t.confidence for t in successful_tasks) / len(successful_tasks)
+        else:
+            merged_confidence = 0.9
+
         return AIResponse(
             status=response_status,
             message=message,
             execution_mode=plan.execution_mode,
             tasks=results_list,
             citations=deduped_citations,
-            confidence=0.9,
+            confidence=merged_confidence,
             metadata={"mock": False},
             pipeline_trace=trace
         )
