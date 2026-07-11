@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     MOCK_USER_ID: str = ""
     APP_ENV: str = "development"
 
+    # CORS configuration
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
+
     model_config = {
         "env_file": ".env",
         "extra": "ignore"

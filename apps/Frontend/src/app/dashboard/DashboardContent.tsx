@@ -56,6 +56,62 @@ export default function DashboardContent({ user, initialView = "home" }: Dashboa
     setActiveView(initialView);
   }, [initialView]);
 
+  useEffect(() => {
+    // Prevent body/html scrolling/shifting while in dashboard to avoid layout shifting
+    const origBodyStyle = {
+      position: document.body.style.position,
+      overflow: document.body.style.overflow,
+      width: document.body.style.width,
+      height: document.body.style.height,
+    };
+    const origHtmlStyle = {
+      position: document.documentElement.style.position,
+      overflow: document.documentElement.style.overflow,
+      width: document.documentElement.style.width,
+      height: document.documentElement.style.height,
+    };
+
+    document.body.style.position = "fixed";
+    document.body.style.overflow = "hidden";
+    document.body.style.width = "100%";
+    document.body.style.height = "100%";
+
+    document.documentElement.style.position = "fixed";
+    document.documentElement.style.overflow = "hidden";
+    document.documentElement.style.width = "100%";
+    document.documentElement.style.height = "100%";
+
+    // Force scroll position to 0,0 to counter any browser-level focus auto-scrolling
+    const forceScrollTop = () => {
+      window.scrollTo(0, 0);
+      document.body.scrollTop = 0;
+      document.documentElement.scrollTop = 0;
+    };
+
+    window.addEventListener("scroll", forceScrollTop, { passive: true });
+    window.addEventListener("resize", forceScrollTop, { passive: true });
+    document.addEventListener("focusin", forceScrollTop, { passive: true });
+
+    // Execute immediately
+    forceScrollTop();
+
+    return () => {
+      document.body.style.position = origBodyStyle.position;
+      document.body.style.overflow = origBodyStyle.overflow;
+      document.body.style.width = origBodyStyle.width;
+      document.body.style.height = origBodyStyle.height;
+
+      document.documentElement.style.position = origHtmlStyle.position;
+      document.documentElement.style.overflow = origHtmlStyle.overflow;
+      document.documentElement.style.width = origHtmlStyle.width;
+      document.documentElement.style.height = origHtmlStyle.height;
+
+      window.removeEventListener("scroll", forceScrollTop);
+      window.removeEventListener("resize", forceScrollTop);
+      document.removeEventListener("focusin", forceScrollTop);
+    };
+  }, []);
+
   // ─── Fetch pages from DB ──────────────────────────────────────────────────
   const fetchPages = useCallback(async () => {
     if (isMockUser) return;
@@ -311,7 +367,14 @@ export default function DashboardContent({ user, initialView = "home" }: Dashboa
       {activeView === "trash" && (
         <DashboardTrash pages={pages} isMockUser={isMockUser} onPagesChanged={fetchPages} />
       )}
-      {activeView === "page" && <AIPanel />}
+      {activeView === "page" && (
+        <AIPanel 
+          user={user} 
+          activePageId={activePageId} 
+          activePageContent={activePage?.content}
+          onUpdatePage={updatePage}
+        />
+      )}
       <SearchOverlay
         isOpen={isSearchOpen}
         pages={pages}

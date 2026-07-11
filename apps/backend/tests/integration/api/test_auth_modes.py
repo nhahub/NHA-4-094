@@ -40,7 +40,9 @@ def mock_document_repo():
 
 @pytest.fixture
 def mock_orchestrator():
-    with patch("app.api.v1.ai.ai_orchestrator_service.execute_query", new_callable=AsyncMock) as mock_exec:
+    with patch("app.api.v1.ai.ai_orchestrator_service.execute_query", new_callable=AsyncMock) as mock_exec, \
+         patch("app.api.v1.ai.validate_session_ownership_and_document", new_callable=AsyncMock) as mock_val:
+        mock_val.return_value = {}
         from app.schemas.ai_schema import AIResponse, ExecutionMode
         mock_exec.return_value = AIResponse(
             status="success",
@@ -134,7 +136,7 @@ def test_mock_mode_chat_success(override_settings, mock_orchestrator):
     override_settings.MOCK_USER_ID = MOCK_USER
 
     payload = {
-        "session_id": "session-abc",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "Explain quantum computing",
         "language": "en"
     }
@@ -154,7 +156,7 @@ def test_mock_mode_summary_success(override_settings, mock_orchestrator):
     override_settings.MOCK_USER_ID = MOCK_USER
 
     payload = {
-        "session_id": "session-abc",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "language": "ar"
     }
 
@@ -173,7 +175,7 @@ def test_mock_mode_quiz_generation_success(override_settings, mock_orchestrator)
     override_settings.MOCK_USER_ID = MOCK_USER
 
     payload = {
-        "session_id": "session-abc",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "language": "en",
         "difficulty": "medium",
         "number_of_questions": 5

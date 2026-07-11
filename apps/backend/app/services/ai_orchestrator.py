@@ -190,6 +190,14 @@ class AIOrchestratorService:
                     response.confidence = 0.0
                     response.metadata["validation_error"] = ", ".join(first_fail_res.reasons + first_fail_res.format_errors)
         
+        # Copy quiz and personalization metadata from tasks to the response root if present
+        for t in response.tasks:
+            t_type = t.type.value if hasattr(t.type, "value") else str(t.type)
+            if t_type == "quiz" and t.status == "success" and "quiz" in t.metadata:
+                response.metadata["quiz"] = t.metadata["quiz"]
+            if t.metadata and "personalization" in t.metadata:
+                response.metadata["personalization"] = t.metadata["personalization"]
+
         # Set trace stages in metadata
         response.metadata["trace"] = trace_stages
         return response

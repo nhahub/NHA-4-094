@@ -1,5 +1,7 @@
-"""Test retrieval with new threshold for projects query."""
 from dotenv import load_dotenv
+import os, sys
+# Add apps/backend directory to python paths
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 load_dotenv(".env")
 import asyncio
 

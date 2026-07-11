@@ -18,7 +18,10 @@ def mock_db_and_memory():
          patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock) as mock_chunks_get, \
          patch("app.ai_system.services.llm.providers.groq_provider.GroqProvider.generate", new_callable=AsyncMock) as mock_groq_gen, \
          patch("app.ai_system.orchestrator.pipeline_registry.get_supabase_client") as mock_supabase_getter, \
-         patch("app.ai_system.validation.verifier.verify_response", new_callable=AsyncMock) as mock_verify:
+         patch("app.ai_system.validation.verifier.verify_response", new_callable=AsyncMock) as mock_verify, \
+         patch("app.api.v1.ai.validate_session_ownership_and_document", new_callable=AsyncMock) as mock_validate:
+        
+        mock_validate.return_value = {}
         
         mock_supabase = MagicMock()
         mock_query = MagicMock()
@@ -190,7 +193,7 @@ def test_chat_endpoint_success(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "لخصلي الملف واعمل quiz",
         "language": "ar",
         "user_level": "intermediate",
@@ -214,7 +217,7 @@ def test_chat_endpoint_document_not_ready(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "Explain this to me",
         "language": "en"
     }
@@ -231,7 +234,7 @@ def test_chat_endpoint_ready_but_zero_chunks(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "Hello",
         "language": "en"
     }
@@ -248,7 +251,7 @@ def test_chat_endpoint_access_denied(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "Explain this to me",
         "language": "en"
     }
@@ -265,7 +268,7 @@ def test_chat_endpoint_document_not_found(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "Explain this to me",
         "language": "en"
     }
@@ -282,7 +285,7 @@ def test_chat_endpoint_vague_clarification(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "message": "hi",
         "language": "en"
     }
@@ -302,7 +305,7 @@ def test_summary_shortcut_success(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "language": "en",
         "user_level": "beginner",
         "summary_style": "bullet_points"
@@ -324,7 +327,7 @@ def test_quiz_shortcut_success(mock_repo):
 
     payload = {
         "user_id": MOCK_USER,
-        "session_id": "sess-xyz",
+        "session_id": "00000000-0000-0000-0000-000000000001",
         "language": "en",
         "user_level": "intermediate",
         "difficulty": "medium",

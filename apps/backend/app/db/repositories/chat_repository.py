@@ -5,19 +5,23 @@ from app.db.supabase_client import get_supabase_client
 logger = logging.getLogger(__name__)
 supabase = get_supabase_client()
 
-async def create_chat_session(user_id: str, session_id: str) -> Dict[str, Any]:
+async def create_chat_session(user_id: str, session_id: str, document_id: Optional[str] = None) -> Dict[str, Any]:
     """Creates a new chat session in PostgreSQL."""
-    logger.info(f"[DB] Creating chat session {session_id} for user {user_id}")
+    logger.info(f"[DB] Creating chat session {session_id} for user {user_id} with document_id {document_id}")
     
     # Check if session already exists
     existing = supabase.table("chat_sessions").select("*").eq("id", session_id).execute()
     if existing.data:
         return existing.data[0]
         
-    response = supabase.table("chat_sessions").insert({
+    row = {
         "id": session_id,
         "user_id": user_id
-    }).execute()
+    }
+    if document_id:
+        row["document_id"] = document_id
+        
+    response = supabase.table("chat_sessions").insert(row).execute()
     return response.data[0] if response.data else {}
 
 async def get_chat_session(session_id: str) -> Optional[Dict[str, Any]]:
@@ -34,13 +38,14 @@ async def save_message(
     retrieved_chunks: List[str] = None,
     source_chunk_id: Optional[str] = None,
     metadata: Dict[str, Any] = None,
-    token_usage: Dict[str, Any] = None
+    token_usage: Dict[str, Any] = None,
+    document_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Saves a message (user or assistant) in PostgreSQL."""
     logger.info(f"[DB] Saving {role} message to session {session_id}")
     
     # Ensure session exists first
-    await create_chat_session(user_id, session_id)
+    await create_chat_session(user_id, session_id, document_id)
     
     row = {
         "session_id": session_id,
@@ -73,3 +78,42 @@ async def get_session_messages(session_id: str, limit: int = 50) -> List[Dict[st
         .execute()
     )
     return response.data or []
+
+async def get_document_sessions(user_id: str, document_id: str) -> List[Dict[str, Any]]:
+    """Retrieves all chat sessions for a specific user and document, ordered by updated_at descending, including first message as title."""
+    response = (
+        supabase.table("chat_sessions")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("document_id", document_id)
+        .order("updated_at", desc=True)
+        .execute()
+    )
+    sessions = response.data or []
+    if not sessions:
+        return []
+        
+    session_ids = [s["id"] for s in sessions]
+    messages_resp = (
+        supabase.table("messages")
+        .select("session_id, content, created_at")
+        .in_("session_id", session_ids)
+        .eq("role", "user")
+        .order("created_at", desc=False)
+        .execute()
+    )
+    
+    first_msgs = {}
+    for m in (messages_resp.data or []):
+        sid = m["session_id"]
+        if sid not in first_msgs:
+            first_msgs[sid] = m["content"]
+            
+    results = []
+    for s in sessions:
+        title = first_msgs.get(s["id"], "New Chat")
+        results.append({
+            **s,
+            "title": title[:50] + "..." if len(title) > 50 else title
+        })
+    return results

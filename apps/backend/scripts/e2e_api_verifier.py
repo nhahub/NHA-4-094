@@ -148,11 +148,17 @@ def verify_endpoints():
         resp = requests.post(f"{BASE_URL}/api/v1/documents/{DOC_A}/chat", json=payload)
         data = resp.json()
         message = data.get("message", "")
-        # Response should be personalized (e.g. contains personalized level tag or simpler terms)
-        if resp.status_code == 200 and "level=beginner" in message and "style=simple" in message:
+        # Response should be personalized (e.g. contains personalized level tag or simpler terms in message or metadata)
+        metadata = data.get("metadata", {})
+        personalization = metadata.get("personalization", {})
+        is_personalized = (
+            ("level=beginner" in message and "style=simple" in message) or
+            (personalization.get("level") == "beginner" and personalization.get("style") == "simple")
+        )
+        if resp.status_code == 200 and is_personalized:
             results["Personalization Tone Adaptation"] = "PASS"
         else:
-            results["Personalization Tone Adaptation"] = f"FAIL (Message: {message})"
+            results["Personalization Tone Adaptation"] = f"FAIL (Message: {message}, Metadata: {metadata})"
     except Exception as e:
         results["Personalization Tone Adaptation"] = f"FAIL ({str(e)})"
 

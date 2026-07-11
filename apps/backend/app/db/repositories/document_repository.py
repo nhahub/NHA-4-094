@@ -228,3 +228,63 @@ async def mark_failed(document_id: str, error_message: str) -> Dict[str, Any]:
         doc["processing_time_seconds"] = processing_time_seconds
         return doc
     return {}
+
+async def get_all_by_user_id(user_id: str) -> list[Dict[str, Any]]:
+    """
+    Retrieves all documents owned by user_id, ordered by created_at DESC.
+    """
+    try:
+        response = (
+            supabase.table("documents")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        logger.warning(f"[DB] Database get_all_by_user_id failed, sorting in-memory fallback: {e}")
+        
+    fallback_docs = [
+        doc for doc in IN_MEMORY_DOCS.values()
+        if str(doc.get("user_id")) == str(user_id)
+    ]
+    # Sort by created_at DESC
+    fallback_docs.sort(key=lambda d: d.get("created_at", ""), reverse=True)
+    return fallback_docs
+
+async def atomic_update_status_reprocess(document_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Atomically transitions a document from 'failed' to 'stored' status.
+    Returns the updated document dictionary if the transition succeeded, or None otherwise.
+    """
+    try:
+        response = (
+            supabase.table("documents")
+            .update({
+                "upload_status": "stored",
+                "error_message": None,
+                "page_count": 0,
+                "chunk_count": 0,
+                "updated_at": "now()"
+            })
+            .eq("id", document_id)
+            .eq("user_id", user_id)
+            .eq("upload_status", "failed")
+            .execute()
+        )
+        if response.data:
+            doc = response.data[0]
+            IN_MEMORY_DOCS[document_id] = doc
+            return doc
+    except Exception as e:
+        logger.warning(f"[DB] Database atomic_update_status_reprocess failed, trying in-memory: {e}")
+        
+    doc = IN_MEMORY_DOCS.get(document_id)
+    if doc and str(doc.get("user_id")) == str(user_id) and doc.get("upload_status") == "failed":
+        doc["upload_status"] = "stored"
+        doc["error_message"] = None
+        doc["page_count"] = 0
+        doc["chunk_count"] = 0
+        return doc
+    return None

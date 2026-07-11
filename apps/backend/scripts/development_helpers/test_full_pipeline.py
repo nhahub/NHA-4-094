@@ -3,7 +3,9 @@ Full end-to-end test: retrieval + LLM generation.
 Tests the exact same path the API uses.
 Run: python test_full_pipeline.py
 """
-import asyncio, os
+import asyncio, os, sys
+# Add apps/backend directory to python paths
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from dotenv import load_dotenv
 load_dotenv(".env")
 

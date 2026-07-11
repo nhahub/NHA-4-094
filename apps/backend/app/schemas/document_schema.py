@@ -19,3 +19,17 @@ class StatusResponse(BaseModel):
     chunk_count: Optional[int] = 0
     error_message: Optional[str] = None
     processing_time_seconds: Optional[float] = None
+
+class DocumentListItem(BaseModel):
+    id: str
+    original_filename: str
+    upload_status: str
+    page_count: Optional[int] = 0
+    chunk_count: Optional[int] = 0
+    error_message: Optional[str] = None
+    created_at: str
+    updated_at: Optional[str] = None
+
+class DocumentListResponse(BaseModel):
+    items: list[DocumentListItem]
+    total: int

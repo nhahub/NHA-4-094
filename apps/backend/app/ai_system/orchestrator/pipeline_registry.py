@@ -453,6 +453,7 @@ async def execute_common_pipeline_steps(
         })
 
     # 8. Apply personalization adapt
+    personalization_info = {}
     if memory_context:
         adapted_content = personalizer.adapt_explanation(
             content_result,
@@ -460,7 +461,14 @@ async def execute_common_pipeline_steps(
             weak_topics=memory_context.weak_topics,
             topic=task.metadata.get("topic")
         )
-        content_result = adapted_content
+        
+        # Extract personalization details for metadata
+        level = memory_context.user_profile.learning_level if (memory_context.user_profile and hasattr(memory_context.user_profile, 'learning_level')) else "beginner"
+        style = memory_context.user_profile.explanation_style if (memory_context.user_profile and hasattr(memory_context.user_profile, 'explanation_style')) else "simple"
+        personalization_info = {"level": level, "style": style}
+        
+        import re
+        content_result = re.sub(r"\s*\[Personalized:[^\]]*\]", "", adapted_content).strip()
 
     # 9. Save assistant response with chunk traceability
     retrieved_chunk_ids = [str(c["id"]) for c in chunks]
@@ -519,7 +527,8 @@ async def execute_common_pipeline_steps(
         "memory_info": memory_info,
         "retrieval_info": retrieval_info,
         "verification_info": verification_trace,
-        "usage_metrics": usage_metrics
+        "usage_metrics": usage_metrics,
+        "personalization": personalization_info
     }
 
     if task_type == TaskType.QUIZ and pre_generated_content is None and llm_response and llm_response.output_json:
@@ -1070,6 +1079,24 @@ async def run_quiz_pipeline(task: Task, request: Any, previous_results: Optional
             } for q in questions_to_insert
         ]
         
+        from app.schemas.ai_schema import QuizDetail
+        
+        # Instantiate and validate through strict Pydantic model
+        quiz_validated = QuizDetail(
+            quiz_id=uuid.UUID(str(quiz_id)),
+            title=quiz_data.title,
+            questions=[
+                {
+                    "id": uuid.UUID(str(q["id"])),
+                    "question_text": q["question_text"],
+                    "options": q["options"],
+                    "difficulty": q["difficulty"],
+                    "concept": q["concept"]
+                } for q in questions_to_insert
+            ]
+        )
+        quiz_detail = quiz_validated.model_dump(mode="json")
+        
         public_content = json.dumps({
             "quiz_id": quiz_id,
             "title": quiz_data.title,
@@ -1083,7 +1110,11 @@ async def run_quiz_pipeline(task: Task, request: Any, previous_results: Optional
             content=public_content,
             citations=[],
             confidence=0.95,
-            metadata={"generated_questions": mapped_questions, "quiz_id": quiz_id}
+            metadata={
+                "generated_questions": mapped_questions, 
+                "quiz_id": quiz_id,
+                "quiz": quiz_detail
+            }
         )
 
     except Exception as e:

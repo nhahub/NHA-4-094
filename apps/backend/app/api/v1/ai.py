@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.ai_schema import PDFChatRequest, SummaryRequest, QuizRequest, AIResponse
 from app.services.ai_orchestrator import ai_orchestrator_service
+from app.services.session_service import validate_session_ownership_and_document
 from app.ai_system.orchestrator.errors import (
     DocumentNotFoundError,
     DocumentAccessDeniedError,
@@ -10,6 +11,9 @@ from app.ai_system.orchestrator.errors import (
     PlanningError,
     AllTasksFailedError
 )
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["ai"])
 
@@ -25,6 +29,7 @@ async def chat_with_pdf(
     PDF-bound conversational search. Accepts any PDF-grounded user query, detects intent,
     plans subtasks (single/compound), executes them over document chunks, and aggregates responses.
     """
+    await validate_session_ownership_and_document(request.session_id, document_id, current_user_id)
     try:
         request.user_id = current_user_id
         response = await ai_orchestrator_service.execute_query(
@@ -75,6 +80,7 @@ async def summarize_pdf(
     Shortcut endpoint to generate a document-level summary.
     Schedules a single 'summary' task utilizing document-level context chunks.
     """
+    await validate_session_ownership_and_document(request.session_id, document_id, current_user_id)
     try:
         request.user_id = current_user_id
         response = await ai_orchestrator_service.execute_query(
@@ -120,6 +126,7 @@ async def generate_pdf_quiz(
     Shortcut endpoint to generate a quiz from the PDF document.
     Schedules a single 'quiz' task utilizing document-level context chunks.
     """
+    await validate_session_ownership_and_document(request.session_id, document_id, current_user_id)
     try:
         request.user_id = current_user_id
         response = await ai_orchestrator_service.execute_query(
@@ -343,6 +350,8 @@ async def chat_with_pdf_stream(
     """
     Progressive search stream returning NDJSON progress steps.
     """
+    # Validate session binding
+    await validate_session_ownership_and_document(request.session_id, document_id, current_user_id)
     # 1. Ownership & Access Validation
     try:
         from app.ai_system.orchestrator.document_guard import validate_document_access
@@ -430,8 +439,12 @@ async def chat_with_pdf_stream(
                 completed_results[task.task_id] = result
                 yield make_event(task.type.value, "completed", f"Completed task {task.task_id}.", t_progress + (50.0 / total_tasks), task.task_id)
             except Exception as e:
-                yield make_event(task.type.value, "failed", f"Task execution failed: {e}", 100.0, task.task_id)
-                return
+                yield make_event(task.type.value, "failed", f"Task execution failed: {e}", t_progress + (50.0 / total_tasks), task.task_id)
+                # Determine if fatal: if it's the primary intent or if it's the only task in the plan
+                is_fatal = (task.type == plan.primary_intent) or (total_tasks == 1)
+                if is_fatal:
+                    return
+                logger.warning(f"Non-fatal task {task.task_id} failed: {e}")
                 
         # Stage 4: Finished (yield final result payload)
         last_res = list(completed_results.values())[-1] if completed_results else None

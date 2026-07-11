@@ -562,7 +562,7 @@ const ContentEditor = ({ activePage, allPages = [], updatePage, onSelectPage, on
   }
 
   return (
-    <main className="flex-1 h-[calc(100vh-40px)] overflow-y-auto text-white my-[20px] border border-[#666565]/50 rounded-lg px-[45px] py-[35px] mx-[20px] relative">
+    <main className="flex-1 h-[calc(100vh-40px)] overflow-y-auto custom-scrollbar text-white my-[20px] border border-[#666565]/50 rounded-lg px-[45px] py-[35px] mx-[20px] relative">
       
       {/* Breadcrumb Header */}
       <div className="absolute top-[25px] left-[45px] right-[45px] flex items-center justify-between z-10">

@@ -195,3 +195,25 @@ class AIResponse(BaseModel):
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     pipeline_trace: Optional[Dict[str, Any]] = None
+
+import uuid
+from pydantic import conlist
+from typing import Literal
+
+class QuizQuestionPublic(BaseModel):
+    id: uuid.UUID = Field(..., description="Unique question identifier UUID.")
+    question_text: str = Field(..., min_length=1, description="The text of the question.")
+    options: conlist(str, min_length=4, max_length=4) = Field(..., description="Exactly four options.")
+    difficulty: Literal["easy", "medium", "hard"] = Field(..., description="Difficulty level.")
+    concept: Optional[str] = Field(None, description="The concept tested by this question.")
+
+    class Config:
+        extra = "forbid"
+
+class QuizDetail(BaseModel):
+    quiz_id: uuid.UUID = Field(..., description="Unique quiz identifier UUID.")
+    title: str = Field(..., min_length=1, description="Title of the quiz.")
+    questions: List[QuizQuestionPublic] = Field(..., description="List of questions.")
+
+    class Config:
+        extra = "forbid"

@@ -3,7 +3,9 @@ End-to-end retrieval test for a specific document.
 Run: python test_retrieval.py
 """
 import asyncio
-import os
+import os, sys
+# Add apps/backend directory to python paths
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from dotenv import load_dotenv
 load_dotenv(".env")
 
