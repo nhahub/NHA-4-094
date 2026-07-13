@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from app.ai_system.validation.schemas import ExecutionStrategy, RetrievedChunk
+from app.ai_system.retrieval import get_document_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,6 @@ async def collect_context(
     and map_reduce_analysis.
     """
     from app.db.repositories import chunk_repository
-    from app.ai_system.retrieval import get_document_retriever
     from app.ai_system.retrieval.schemas import RetrievalRequest, RetrievalStatus
 
     # Default metadata lookup skips chunk retrieval entirely
@@ -34,7 +34,16 @@ async def collect_context(
         ))
         
         if request is not None:
-            request._retrieval_result = res
+            # Check if request is wrapped in PipelineRequestContext or has _pipeline_state
+            state = getattr(request, "state", None) or getattr(request, "_pipeline_state", None)
+            if state is not None:
+                state.retrieval_result = res
+            else:
+                # Fallback to direct attribute setting for backward compatibility
+                try:
+                    request._retrieval_result = res
+                except Exception:
+                    pass
             
         chunks = []
         if res.status == RetrievalStatus.FOUND:

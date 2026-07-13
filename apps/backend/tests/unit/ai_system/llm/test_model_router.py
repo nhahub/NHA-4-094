@@ -15,9 +15,18 @@ def test_model_router_mappings():
     # Test orchestrator task mappings
     config_chat = ModelRouter.route_task("chat_answer")
     assert config_chat.key_group == "REASONING"
+    assert config_chat.reasoning_effort == "medium"
 
     config_explain = ModelRouter.route_task("explain")
     assert config_explain.key_group == "REASONING"
+
+    # Test complex task selects high reasoning
+    config_comparison = ModelRouter.route_task("comparison_table")
+    assert config_comparison.reasoning_effort == "high"
+
+    # Test simple planning selects low reasoning
+    config_rewrite = ModelRouter.route_task("query_rewrite")
+    assert config_rewrite.reasoning_effort == "low"
 
 def test_model_router_invalid_task_raises_exception():
     # Unknown task must raise ValueError

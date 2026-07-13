@@ -96,5 +96,28 @@ CONFIDENCE_WEIGHTS = {
 # ------------------------------------------------------------------
 # Other Thresholds and Limits
 # ------------------------------------------------------------------
+# Legacy single threshold kept for backward compatibility.
+# New code should use the task-specific thresholds below.
 GROUNDING_SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.75"))
 MAX_VERIFICATION_RETRIES = int(os.getenv("MAX_VERIFICATION_RETRIES", "3"))
+
+# ------------------------------------------------------------------
+# Task-specific Evidence Sufficiency Thresholds (Provisional)
+#
+# These thresholds are PROVISIONAL.  They have not been calibrated
+# against a held-out distribution of real semantic/keyword/hybrid/
+# reranker scores.  Treat them as reasonable starting points and
+# re-evaluate once score histograms are available.
+#
+# Calibration guidance:
+#   - Inspect the similarity_score distribution for focused_retrieval
+#     across a representative query set.
+#   - Set THRESHOLD_FACTUAL_QA slightly below the P25 of positive examples.
+#   - Set THRESHOLD_FACTUAL_QA_SPECIFIC higher than THRESHOLD_FACTUAL_QA
+#     because specific-fact queries (years, counts) require precise chunks.
+#   - Set THRESHOLD_DEFAULT lower to avoid rejecting broad tasks.
+# All values are overridable via environment variables.
+# ------------------------------------------------------------------
+THRESHOLD_FACTUAL_QA = float(os.getenv("THRESHOLD_FACTUAL_QA", "0.70"))
+THRESHOLD_FACTUAL_QA_SPECIFIC = float(os.getenv("THRESHOLD_FACTUAL_QA_SPECIFIC", "0.75"))
+THRESHOLD_DEFAULT = float(os.getenv("THRESHOLD_DEFAULT", "0.60"))

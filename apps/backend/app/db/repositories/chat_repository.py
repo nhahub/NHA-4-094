@@ -6,23 +6,37 @@ logger = logging.getLogger(__name__)
 supabase = get_supabase_client()
 
 async def create_chat_session(user_id: str, session_id: str, document_id: Optional[str] = None) -> Dict[str, Any]:
-    """Creates a new chat session in PostgreSQL."""
+    """Creates a new chat session in PostgreSQL.
+
+    Race-safe and security-hardened strategy:
+      1. Attempt INSERT (never use upsert, which could overwrite ownership if a client-generated UUID collides).
+      2. If a duplicate-key exception occurs, catch it and fetch the existing session.
+      3. Return the session; the service layer must verify ownership against user_id.
+    """
     logger.info(f"[DB] Creating chat session {session_id} for user {user_id} with document_id {document_id}")
-    
-    # Check if session already exists
-    existing = supabase.table("chat_sessions").select("*").eq("id", session_id).execute()
-    if existing.data:
-        return existing.data[0]
-        
+
     row = {
         "id": session_id,
         "user_id": user_id
     }
     if document_id:
         row["document_id"] = document_id
-        
-    response = supabase.table("chat_sessions").insert(row).execute()
-    return response.data[0] if response.data else {}
+
+    try:
+        response = supabase.table("chat_sessions").insert(row).execute()
+        if response.data:
+            return response.data[0]
+    except Exception:
+        # INSERT failed — likely a duplicate-key conflict; fetch the existing row
+        pass
+
+    existing = supabase.table("chat_sessions").select("*").eq("id", session_id).execute()
+    if existing.data:
+        return existing.data[0]
+
+    # If we still have no row, something unexpected happened — return empty dict
+    logger.error(f"[DB] Failed to create or fetch chat session {session_id}")
+    return {}
 
 async def get_chat_session(session_id: str) -> Optional[Dict[str, Any]]:
     """Gets a chat session by id."""
@@ -30,9 +44,21 @@ async def get_chat_session(session_id: str) -> Optional[Dict[str, Any]]:
     return response.data[0] if response.data else None
 
 async def update_chat_session_title(session_id: str, title: str) -> Dict[str, Any]:
-    """Updates the title of a chat session in PostgreSQL."""
+    """Updates the title of a chat session atomically.
+
+    Uses a conditional update (WHERE title IS NULL) so that concurrent
+    title-generation tasks do not overwrite a title that was already set
+    by a faster competing task.
+    """
     logger.info(f"[DB] Updating chat session {session_id} title to: {title}")
-    response = supabase.table("chat_sessions").update({"title": title}).eq("id", session_id).execute()
+    # Update only when title is currently NULL — atomic guard against races
+    response = (
+        supabase.table("chat_sessions")
+        .update({"title": title})
+        .eq("id", session_id)
+        .is_("title", "null")
+        .execute()
+    )
     return response.data[0] if response.data else {}
 
 async def save_message(
@@ -57,9 +83,20 @@ async def save_message(
     if role == "user" and content:
         session = await get_chat_session(session_id)
         if session and not session.get("title"):
+            # NOTE: asyncio.create_task is non-durable. If the event loop exits
+            # before this task completes (e.g., process restart, timeout), the
+            # title update is silently dropped. This is acceptable for the
+            # current single-process deployment. For production durability,
+            # migrate to a persistent background queue (e.g. ARQ, Celery).
             import asyncio
             async def _bg_title_gen():
                 try:
+                    # Concurrency guard: re-read the session inside the task so
+                    # that concurrent first messages do not trigger duplicate LLM calls.
+                    current = await get_chat_session(session_id)
+                    if not current or current.get("title"):
+                        return  # another task already generated and saved the title
+
                     from app.ai_system.services.llm.generation_service import GenerationService
                     gen_service = GenerationService()
                     title = await gen_service.generate_chat_title(content)
@@ -67,7 +104,7 @@ async def save_message(
                         await update_chat_session_title(session_id, title)
                 except Exception as e:
                     logger.error(f"Failed to generate/save chat title in background: {e}")
-            
+
             asyncio.create_task(_bg_title_gen())
 
     row = {

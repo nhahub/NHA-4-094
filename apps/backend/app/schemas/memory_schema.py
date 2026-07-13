@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -24,8 +24,7 @@ class MemoryItem(MemoryItemBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ConversationSummaryBase(BaseModel):
     session_id: str
@@ -45,8 +44,7 @@ class ConversationSummary(ConversationSummaryBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class LearningEventBase(BaseModel):
     user_id: str
@@ -64,8 +62,7 @@ class LearningEvent(LearningEventBase):
     id: Optional[str] = None
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TopicMasteryBase(BaseModel):
     user_id: str
@@ -88,8 +85,7 @@ class TopicMastery(TopicMasteryBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class WeakTopicBase(BaseModel):
     user_id: str
@@ -109,8 +105,7 @@ class WeakTopic(WeakTopicBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class MistakePatternBase(BaseModel):
     user_id: str
@@ -132,5 +127,4 @@ class MistakePattern(MistakePatternBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

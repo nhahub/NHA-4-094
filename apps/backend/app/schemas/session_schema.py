@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -13,8 +13,7 @@ class SessionResponse(BaseModel):
     updated_at: datetime
     title: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class MessageItem(BaseModel):
     id: str
@@ -25,8 +24,7 @@ class MessageItem(BaseModel):
     topic: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SessionMessagesResponse(BaseModel):
     session_id: str

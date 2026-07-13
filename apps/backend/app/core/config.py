@@ -47,6 +47,46 @@ class Settings(BaseSettings):
     GROQ_EVALUATOR_MODEL: str = ""
     GROQ_QUIZ_GENERATOR_MODEL: str = ""
 
+    # LLM models routing
+    GROQ_PRIMARY_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_FIRST_FALLBACK_MODEL: str = "qwen/qwen3-32b"
+    GROQ_EMERGENCY_FALLBACK_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_LIGHTWEIGHT_FALLBACK_MODEL: str = "openai/gpt-oss-20b"
+
+    # Reasoning policy
+    GROQ_PLANNING_REASONING_EFFORT: str = "low"
+    GROQ_MEMORY_MAP_REASONING_EFFORT: str = "low"
+    GROQ_QUERY_REWRITE_REASONING_EFFORT: str = "low"
+    GROQ_CHAT_REASONING_EFFORT: str = "medium"
+    GROQ_EXECUTION_REASONING_EFFORT: str = "medium"
+    GROQ_QUIZ_REASONING_EFFORT: str = "medium"
+    GROQ_VERIFICATION_REASONING_EFFORT: str = "medium"
+    GROQ_COMPLEX_REASONING_EFFORT: str = "high"
+    GROQ_INCLUDE_REASONING: bool = False
+
+    # Reranker router
+    RERANKER_ENABLED: bool = True
+    RERANKER_PROVIDER_ORDER: str = "jina,cohere,cloudflare,rule_based,hybrid"
+    RERANKER_CANDIDATE_K: int = 25
+    RERANKER_TOP_K: int = 8
+    RERANKER_TIMEOUT_SECONDS: float = 15.0
+    RERANKER_MAX_RETRIES: int = 1
+    RERANKER_RULE_BASED_FALLBACK: bool = True
+    RERANKER_PRESERVE_HYBRID_ORDER_ON_FAILURE: bool = True
+
+    # Jina
+    JINA_API_KEY: str = ""
+    JINA_RERANKER_ENDPOINT: str = "https://api.jina.ai/v1/rerank"
+    JINA_RERANKER_MODEL: str = "jina-reranker-v3"
+
+    # Cohere
+    COHERE_API_KEY: str = ""
+    COHERE_RERANKER_ENDPOINT: str = "https://api.cohere.com/v2/rerank"
+    COHERE_RERANKER_MODEL: str = "rerank-v4.0-pro"
+
+    # Cloudflare reranker
+    CLOUDFLARE_RERANKER_MODEL: str = "@cf/baai/bge-reranker-base"
+
     # Embedding configurations
     EMBEDDING_PROVIDER: str = "cloudflare"
     EMBEDDING_MODEL_NAME: str = "@cf/baai/bge-m3"

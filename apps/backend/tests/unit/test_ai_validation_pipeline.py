@@ -156,6 +156,7 @@ async def test_mandatory_user_cases(mock_db_document):
         # 1. "هل الملف منظم؟" -> routes to document_structure_analysis
         res_structure = await validate_input("هل الملف منظم؟", "doc-123", "user-123")
         assert res_structure.primary_task == DocumentTaskType.document_structure_analysis
+        mock_gen.assert_not_called()
         
         # 2. "يا غبي لخص الملف" -> low abuse + valid task -> strategy: answer_with_soft_boundary
         # Set mock response for intent detection LLM call
@@ -180,3 +181,78 @@ async def test_mandatory_user_cases(mock_db_document):
         assert res_soft.safety["contains_abuse"] is True
         assert res_soft.safety["abuse_severity"] == "low"
         assert res_soft.response_strategy == ResponseStrategy.answer_with_soft_boundary
+        mock_gen.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_additional_metadata_long_uses_zero_llm_calls(mock_db_document):
+    with patch("app.ai_system.services.llm.providers.groq_provider.GroqProvider.generate") as mock_gen:
+        res = await validate_input("هل الملف طويل؟", "doc-123", "user-123")
+        assert res.primary_task == DocumentTaskType.document_metadata_query
+        assert res.context_strategy == ExecutionStrategy.metadata_lookup
+        assert res.allow_pipeline is True
+        mock_gen.assert_not_called()
+
+        ans = await resolve_metadata_query("doc-123", "هل الملف طويل؟", lang="ar")
+        assert "4" in ans  # 4 pages
+        assert "12" in ans  # 12 chunks
+
+@pytest.mark.asyncio
+async def test_multi_label_routing_evaluation_and_transformation():
+    # "إيه رأيك في الـCV وحسنهولي" -> combined evaluation and transformation
+    res = await validate_input("إيه رأيك في الـCV وحسنهولي", "doc-123", "user-123")
+    assert res.primary_task == DocumentTaskType.document_evaluation
+    assert DocumentTaskType.document_transformation in res.secondary_tasks
+    assert res.allows_professional_rubric is True
+    assert res.allows_transformation is True
+
+@pytest.mark.asyncio
+async def test_document_structure_analysis_evidence_sufficiency():
+    # Needs representative section coverage (>=2 distinct pages)
+    chunks_insufficient = [
+        RetrievedChunk(chunk_id="c1", text="Intro heading", page_number=1, similarity_score=0.80)
+    ]
+    res_insufficient = await validate_evidence(
+        primary_task=DocumentTaskType.document_structure_analysis,
+        collected_chunks=chunks_insufficient,
+        query="هل الملف منظم؟"
+    )
+    assert res_insufficient.evidence_status == EvidenceStatus.partial
+    assert "INSUFFICIENT_SECTION_COVERAGE_FOR_STRUCTURE" in res_insufficient.reason_codes
+
+    chunks_sufficient = [
+        RetrievedChunk(chunk_id="c1", text="Intro heading", page_number=1, similarity_score=0.80),
+        RetrievedChunk(chunk_id="c2", text="Conclusion heading", page_number=4, similarity_score=0.80)
+    ]
+    res_sufficient = await validate_evidence(
+        primary_task=DocumentTaskType.document_structure_analysis,
+        collected_chunks=chunks_sufficient,
+        query="هل الملف منظم؟"
+    )
+    assert res_sufficient.evidence_status == EvidenceStatus.sufficient
+
+@pytest.mark.asyncio
+async def test_document_comparison_evidence_sufficiency():
+    # Needs >=3 chunks and >=2 pages
+    chunks_insufficient = [
+        RetrievedChunk(chunk_id="c1", text="Compare A", page_number=1, similarity_score=0.80),
+        RetrievedChunk(chunk_id="c2", text="Compare B", page_number=1, similarity_score=0.80)
+    ]
+    res_insufficient = await validate_evidence(
+        primary_task=DocumentTaskType.document_comparison,
+        collected_chunks=chunks_insufficient,
+        query="مقارنة بين القسمين"
+    )
+    assert res_insufficient.evidence_status == EvidenceStatus.partial
+    assert "INSUFFICIENT_COVERAGE_FOR_COMPARISON" in res_insufficient.reason_codes
+
+    chunks_sufficient = [
+        RetrievedChunk(chunk_id="c1", text="Compare A", page_number=1, similarity_score=0.80),
+        RetrievedChunk(chunk_id="c2", text="Compare B", page_number=2, similarity_score=0.80),
+        RetrievedChunk(chunk_id="c3", text="Compare C", page_number=3, similarity_score=0.80)
+    ]
+    res_sufficient = await validate_evidence(
+        primary_task=DocumentTaskType.document_comparison,
+        collected_chunks=chunks_sufficient,
+        query="مقارنة بين القسمين"
+    )
+    assert res_sufficient.evidence_status == EvidenceStatus.sufficient

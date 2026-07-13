@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -76,5 +76,4 @@ class UserProfile(BaseModel):
                 data["accessibility"] = data["accessibility_prefs"]
         return data
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

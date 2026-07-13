@@ -3,6 +3,7 @@ from app.schemas.ai_schema import AIResponse
 from app.ai_system.orchestrator.document_guard import validate_document_access
 from app.ai_system.orchestrator.planner import TaskPlanner
 from app.ai_system.orchestrator.orchestrator import TaskOrchestrator
+from app.ai_system.validation.input_validator import validate_input
 
 class AIOrchestratorService:
     """
@@ -18,8 +19,19 @@ class AIOrchestratorService:
         Validates access to the document, compiles the task plan,
         routes execution through the orchestrator, and collects debug trace stages.
         """
-        trace_stages = []
-        request._trace_stages = trace_stages
+        from app.ai_system.orchestrator.pipeline_state import PipelineState, PipelineRequestContext
+
+        pipeline_state = PipelineState()
+        context = PipelineRequestContext(request=request, state=pipeline_state)
+        # Store on raw request too for backward compatibility with external code
+        try:
+            request._pipeline_state = pipeline_state
+        except Exception:
+            pass
+        
+        # Backward-compat: keep _trace_stages for code that references it directly
+        request._trace_stages = pipeline_state.trace_stages
+        trace_stages = pipeline_state.trace_stages
         
         # 1. Document Guard
         try:
@@ -39,7 +51,6 @@ class AIOrchestratorService:
             else:
                 query_text = "Process document"
 
-        from app.ai_system.validation.input_validator import validate_input
         from app.ai_system.validation.schemas import RequestType, ResponseStrategy, DocumentTaskType, TaskType as ValTaskType
         from app.ai_system.validation.dynamic_response import compose_dynamic_response
         from app.ai_system.validation.verifier import verify_response
@@ -51,7 +62,8 @@ class AIOrchestratorService:
             user_id=user_id
         )
         
-        # Attach validation result to request for downstream retrieval and verifier tasks
+        # Store validation result in pipeline state and raw request (for backward compat)
+        pipeline_state.input_validation = validation_result
         request._input_validation = validation_result
         lang = validation_result.language
         
@@ -140,6 +152,7 @@ class AIOrchestratorService:
         })
         if hasattr(request, "message"):
             request.message = validation_result.sanitized_input
+            context.message = validation_result.sanitized_input
         
         # 3. Planner
         try:
@@ -155,7 +168,7 @@ class AIOrchestratorService:
             trace_stages.append({"stage": "planner", "status": "failed", "error": str(e)})
             raise
             
-        response = await self.orchestrator.execute(plan, request)
+        response = await self.orchestrator.execute(plan, context)
         
         # 4. Final Output Validation
         if response.status in ["success", "partial"]:

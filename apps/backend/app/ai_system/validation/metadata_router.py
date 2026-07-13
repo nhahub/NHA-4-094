@@ -6,7 +6,14 @@ logger = logging.getLogger(__name__)
 async def resolve_metadata_query(document_id: str, query: str, lang: str = "ar") -> str:
     """
     Directly resolves metadata questions (file size, page count, chunk count, upload status)
-    using verified database properties, requiring zero LLM calls and skipping RAG.
+    using verified database properties — zero LLM calls, skips RAG entirely.
+
+    IMPORTANT DISTINCTION:
+    - document_metadata_query (this function): answers questions about FILE PROPERTIES
+      stored in the database (size, page count, chunk count, status, upload date).
+      It does NOT look at the document content.
+    - document_structure_analysis: answers questions about how the document CONTENT
+      is organised (sections, headings, flow, logical structure) — requires RAG retrieval.
     """
     from app.db.repositories import document_repository
     doc = await document_repository.get_by_id(document_id)
@@ -36,8 +43,8 @@ async def resolve_metadata_query(document_id: str, query: str, lang: str = "ar")
         else:
             return f"The size of '{original_filename}' is {size_str}, which is well within the upload limits."
 
-    # 2. Length/pages queries
-    if any(k in query_lower for k in ["طويل", "صفحة", "صفحات", "pages", "page count", "how long", "length"]):
+    # 2. Length/pages queries ("طويل", "صفحات", "how long", "how many pages")
+    if any(k in query_lower for k in ["طويل", "صفحة", "صفحات", "pages", "page count", "how long", "length", "how many pages"]):
         if lang == "ar":
             return f"ملف '{original_filename}' يحتوي على {page_count} صفحات وتم تقسيمه إلى {chunk_count} أجزاء (chunks)."
         else:

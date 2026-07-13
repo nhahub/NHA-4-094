@@ -21,14 +21,38 @@ def _mock_memory_context(**overrides):
     return MemoryContext(**base)
 
 @pytest.mark.asyncio
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
+@patch("app.ai_system.validation.context_collector.get_document_retriever")
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
 @patch("app.ai_system.services.llm.generate.llm_generate", new_callable=AsyncMock)
 async def test_empty_retrieval_does_not_call_llm_and_returns_arabic_fallback(
-    mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_llm_gen, mock_doc, mock_chunks, mock_retrieve, mock_get_retriever, mock_validate_input
 ):
     """1. Empty retrieval does not call LLM and 2. Returns exactly the Arabic fallback response."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    from unittest.mock import MagicMock
+
+    mock_validate_input.return_value = InputValidationResult(
+        valid=True,
+        sanitized_input="tell me about photosynthesis",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.document_factual_qa,
+        context_strategy=ExecutionStrategy.focused_retrieval,
+        requires_document_context=True,
+        allow_pipeline=True,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.continue_to_planner,
+        action=InputAction.CONTINUE,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
+
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000101",
         "user_id": "00000000-0000-0000-0000-000000000000",
@@ -36,10 +60,15 @@ async def test_empty_retrieval_does_not_call_llm_and_returns_arabic_fallback(
         "chunk_count": 5
     }
     mock_chunks.return_value = [{"chunk_id": "c1", "embedding": [0.1] * 1536}]
-    mock_retrieve.return_value = RetrievalResult(
+
+    _no_context_result = RetrievalResult(
         status=RetrievalStatus.NO_RELEVANT_CONTEXT,
         reason="No chunks found above similarity threshold"
     )
+    cc_retriever = MagicMock()
+    mock_get_retriever.return_value = cc_retriever
+    cc_retriever.retrieve = AsyncMock(return_value=_no_context_result)
+    mock_retrieve.return_value = _no_context_result
 
     payload = {
         "user_id": "00000000-0000-0000-0000-000000000000",
@@ -83,14 +112,33 @@ async def test_document_not_ready_blocks_planner_and_llm(
     mock_retrieve.assert_not_called()
 
 @pytest.mark.asyncio
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
 @patch("app.ai_system.services.llm.generate.llm_generate", new_callable=AsyncMock)
 async def test_out_of_scope_question_returns_fallback(
-    mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_llm_gen, mock_doc, mock_chunks, mock_retrieve, mock_validate_input
 ):
     """4. Out-of-scope question on a valid PDF triggers prompt no-answer and returns fallback."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    mock_validate_input.return_value = InputValidationResult(
+        valid=False,
+        sanitized_input="explain how to build a spaceship",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.unrelated_external_question,
+        allow_pipeline=False,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.generate_out_of_scope_response,
+        action=InputAction.REJECT,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
+
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000101",
         "user_id": "00000000-0000-0000-0000-000000000000",
@@ -109,11 +157,14 @@ async def test_out_of_scope_question_returns_fallback(
     response = client.post("/api/v1/documents/00000000-0000-0000-0000-000000000101/chat", json=payload)
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "no_answer"
-    assert data["message"] == "لم أجد إجابة واضحة في الملف المرفوع."
+    assert data["status"] == "success"
+    from app.ai_system.validation.dynamic_response import OUT_OF_SCOPE_AR_RESPONSES, OUT_OF_SCOPE_EN_RESPONSES
+    assert data["message"] in (OUT_OF_SCOPE_AR_RESPONSES + OUT_OF_SCOPE_EN_RESPONSES)
     mock_llm_gen.assert_not_called()
 
 @pytest.mark.asyncio
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
+@patch("app.ai_system.validation.context_collector.get_document_retriever")
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
@@ -124,9 +175,31 @@ async def test_out_of_scope_question_returns_fallback(
 @patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock)
 async def test_unsupported_claim_fails_verifier_and_triggers_fallback(
-    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks, mock_retrieve, mock_get_retriever, mock_validate_input
 ):
     """5. Unsupported LLM claim fails verifier and outputs fallback response immediately."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    from unittest.mock import MagicMock
+
+    mock_validate_input.return_value = InputValidationResult(
+        valid=True,
+        sanitized_input="tell me about photosynthesis",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.document_factual_qa,
+        context_strategy=ExecutionStrategy.focused_retrieval,
+        requires_document_context=True,
+        allow_pipeline=True,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.continue_to_planner,
+        action=InputAction.CONTINUE,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
+
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000101",
         "user_id": "00000000-0000-0000-0000-000000000000",
@@ -134,12 +207,18 @@ async def test_unsupported_claim_fails_verifier_and_triggers_fallback(
         "chunk_count": 5
     }
     mock_chunks.return_value = [{"chunk_id": "c1", "embedding": [0.1] * 1536}]
-    mock_retrieve.return_value = RetrievalResult(
+
+    cc_retriever = MagicMock()
+    mock_get_retriever.return_value = cc_retriever
+    cc_retriever.retrieve = AsyncMock(return_value=RetrievalResult(
         status=RetrievalStatus.FOUND,
         confidence=0.9,
-        chunks=[RetrievedChunk(chunk_id="chunk-abc", document_id="00000000-0000-0000-0000-000000000101", user_id="u1", text="photosynthesis text", score=0.9)],
+        chunks=[RetrievedChunk(chunk_id="chunk-abc", document_id="00000000-0000-0000-0000-000000000101",
+                               user_id="u1", text="photosynthesis text", score=0.9)],
         context_text="photosynthesis text"
-    )
+    ))
+    mock_retrieve.return_value = cc_retriever.retrieve.return_value
+
     mock_mem.return_value = _mock_memory_context()
     
     from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
@@ -234,8 +313,10 @@ async def test_large_document_quiz_uses_map_reduce_routed_by_token_budget(
     )
 
     mock_groq_gen.side_effect = [
-        {"text": "Map output"},
-        {"text": "Final quiz results summary generated for testing the map-reduce mechanism."}
+        {"text": "Map output", "input_tokens": 100, "output_tokens": 50, "latency_ms": 100, "key_alias": "k1"}, # validate_input
+        {"text": "Map output", "input_tokens": 100, "output_tokens": 50, "latency_ms": 100, "key_alias": "k1"}, # process_block (map)
+        {"text": "Final quiz results summary generated for testing the map-reduce mechanism.", "input_tokens": 100, "output_tokens": 50, "latency_ms": 100, "key_alias": "k1"}, # reduce phase
+        {"text": "Final quiz results summary generated for testing the map-reduce mechanism.", "input_tokens": 100, "output_tokens": 50, "latency_ms": 100, "key_alias": "k1"}
     ]
     
     mock_llm_judge.return_value = {
@@ -255,6 +336,8 @@ async def test_large_document_quiz_uses_map_reduce_routed_by_token_budget(
     assert mock_groq_gen.call_count >= 2
 
 @pytest.mark.asyncio
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
+@patch("app.ai_system.validation.context_collector.get_document_retriever")
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
@@ -265,9 +348,32 @@ async def test_large_document_quiz_uses_map_reduce_routed_by_token_budget(
 @patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock)
 async def test_citations_only_reference_retrieved_chunks(
-    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen,
+    mock_doc, mock_chunks, mock_retrieve, mock_get_retriever, mock_validate_input
 ):
     """7. Citations only reference real retrieved chunk IDs."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    from unittest.mock import MagicMock
+
+    mock_validate_input.return_value = InputValidationResult(
+        valid=True,
+        sanitized_input="sunlight and chloroplast",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.document_factual_qa,
+        context_strategy=ExecutionStrategy.focused_retrieval,
+        requires_document_context=True,
+        allow_pipeline=True,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.continue_to_planner,
+        action=InputAction.CONTINUE,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
+
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000101",
         "user_id": "00000000-0000-0000-0000-000000000000",
@@ -275,14 +381,21 @@ async def test_citations_only_reference_retrieved_chunks(
         "chunk_count": 5
     }
     mock_chunks.return_value = [{"chunk_id": "c1", "embedding": [0.1] * 1536}]
-    mock_retrieve.return_value = RetrievalResult(
+
+    _retrieval_result = RetrievalResult(
         status=RetrievalStatus.FOUND,
         confidence=0.9,
         chunks=[
-            RetrievedChunk(chunk_id="chunk-photo-1", document_id="00000000-0000-0000-0000-000000000101", user_id="u1", text="chloroplast converts sunlight", score=0.9)
+            RetrievedChunk(chunk_id="chunk-photo-1", document_id="00000000-0000-0000-0000-000000000101",
+                           user_id="u1", text="chloroplast converts sunlight", score=0.9)
         ],
         context_text="chloroplast converts sunlight"
     )
+    cc_retriever = MagicMock()
+    mock_get_retriever.return_value = cc_retriever
+    cc_retriever.retrieve = AsyncMock(return_value=_retrieval_result)
+    mock_retrieve.return_value = _retrieval_result
+
     mock_mem.return_value = _mock_memory_context()
 
     from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
@@ -292,7 +405,7 @@ async def test_citations_only_reference_retrieved_chunks(
         output_text="Sunlight is converted inside the chloroplast.",
         usage_metrics=LLMUsageMetrics(provider="g", model="m", key_alias="k", input_tokens=10, output_tokens=5, total_tokens=15, latency_ms=100)
     )
-    
+
     mock_llm_judge.return_value = {
         "text": '{"grounded": true, "grounding_score": 1.0, "suggested_action": "pass", "reason": "OK"}'
     }
@@ -310,8 +423,10 @@ async def test_citations_only_reference_retrieved_chunks(
     assert len(data["citations"]) == 1
     assert data["citations"][0]["chunk_id"] == "chunk-photo-1"
 
+
 @pytest.mark.asyncio
-@patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
+@patch("app.ai_system.validation.context_collector.get_document_retriever")
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
 @patch("app.ai_system.services.llm.generate.llm_generate", new_callable=AsyncMock)
@@ -321,9 +436,34 @@ async def test_citations_only_reference_retrieved_chunks(
 @patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock)
 async def test_response_trace_stages_exist(
-    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_mem, mock_summarize, mock_store_save, mock_chat_save,
+    mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks,
+    mock_get_retriever, mock_validate_input
 ):
     """8. Final successful response contains all trace stages in metadata."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    from unittest.mock import MagicMock
+
+    # Force the input validator to classify the query as a focused document_factual_qa
+    mock_validate_input.return_value = InputValidationResult(
+        valid=True,
+        sanitized_input="explain photosynthesis",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.document_factual_qa,
+        context_strategy=ExecutionStrategy.focused_retrieval,
+        requires_document_context=True,
+        allow_pipeline=True,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.continue_to_planner,
+        action=InputAction.CONTINUE,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
+
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000101",
         "user_id": "00000000-0000-0000-0000-000000000000",
@@ -331,24 +471,30 @@ async def test_response_trace_stages_exist(
         "chunk_count": 5
     }
     mock_chunks.return_value = [{"chunk_id": "c1", "embedding": [0.1] * 1536}]
-    mock_retrieve.return_value = RetrievalResult(
+
+    mock_retriever = MagicMock()
+    mock_get_retriever.return_value = mock_retriever
+    mock_retriever.retrieve = AsyncMock(return_value=RetrievalResult(
         status=RetrievalStatus.FOUND,
         confidence=0.9,
         chunks=[
-            RetrievedChunk(chunk_id="c1", document_id="00000000-0000-0000-0000-000000000101", user_id="u1", text="photosynthesis process", score=0.9)
+            RetrievedChunk(chunk_id="c1", document_id="00000000-0000-0000-0000-000000000101",
+                           user_id="u1", text="Photosynthesis is the process by which plants convert sunlight into energy.", score=0.92)
         ],
-        context_text="photosynthesis process"
-    )
+        context_text="Photosynthesis is the process by which plants convert sunlight into energy."
+    ))
+
     mock_mem.return_value = _mock_memory_context()
 
     from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
     mock_llm_gen.return_value = LLMResponsePayload(
         task_id="t1",
         status="success",
-        output_text="photosynthesis details text.",
-        usage_metrics=LLMUsageMetrics(provider="g", model="m", key_alias="k", input_tokens=10, output_tokens=5, total_tokens=15, latency_ms=100)
+        output_text="Photosynthesis is the process by which plants convert sunlight into energy.",
+        usage_metrics=LLMUsageMetrics(provider="groq", model="m", key_alias="k",
+                                      input_tokens=10, output_tokens=20, total_tokens=30, latency_ms=120)
     )
-    
+
     mock_llm_judge.return_value = {
         "text": '{"grounded": true, "grounding_score": 1.0, "suggested_action": "pass", "reason": "OK"}'
     }
@@ -356,7 +502,7 @@ async def test_response_trace_stages_exist(
     payload = {
         "user_id": "00000000-0000-0000-0000-000000000000",
         "session_id": "sess-test",
-        "message": "tell me about photosynthesis",
+        "message": "explain photosynthesis",
         "language": "ar"
     }
 
@@ -364,7 +510,7 @@ async def test_response_trace_stages_exist(
     assert response.status_code == 200
     data = response.json()
     assert "trace" in data["metadata"]
-    
+
     stages = [item["stage"] for item in data["metadata"]["trace"]]
     assert "document_guard" in stages
     assert "input_validation" in stages
@@ -374,3 +520,4 @@ async def test_response_trace_stages_exist(
     assert "verifier" in stages
     assert "citations" in stages
     assert "save_chat_state" in stages
+

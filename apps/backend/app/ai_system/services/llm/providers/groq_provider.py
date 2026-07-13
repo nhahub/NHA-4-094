@@ -62,6 +62,10 @@ class GroqProvider(BaseLLMProvider):
         if not api_key:
             raise LLMAuthenticationError("API Key is required but was not provided.")
 
+        from app.ai_system.utils.circuit_breaker import circuit_breaker_registry
+        if not await circuit_breaker_registry.allow_request(model):
+            raise LLMProviderUnavailableError(f"Circuit breaker is OPEN for model '{model}'. Skipping request.")
+
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -76,6 +80,11 @@ class GroqProvider(BaseLLMProvider):
         # Pop profile-specific metadata if passed
         profile = kwargs.pop("profile", "execution_reduce")
 
+        # Resolve reasoning_effort/include_reasoning parameters if present
+        from app.core.config import settings
+        reasoning_effort = kwargs.pop("reasoning_effort", None)
+        include_reasoning = kwargs.pop("include_reasoning", getattr(settings, "GROQ_INCLUDE_REASONING", False))
+
         payload = {
             "model": model,
             "messages": messages,
@@ -89,14 +98,28 @@ class GroqProvider(BaseLLMProvider):
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
+        # Strip or append reasoning parameters based on model support
+        if model.startswith("openai/gpt-oss"):
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
+            payload["include_reasoning"] = include_reasoning
+        else:
+            payload.pop("reasoning_effort", None)
+            payload.pop("include_reasoning", None)
+
         start_time = time.perf_counter()
         client = llm_client_factory.get_client(profile)
 
         try:
             response = await client.post(url, headers=headers, json=payload)
-        except httpx.TimeoutException as exc:
-            raise LLMTimeoutError(f"Request to Groq timed out: {exc}")
-        except httpx.RequestError as exc:
+            if response.status_code == 200:
+                await circuit_breaker_registry.record_success(model)
+            else:
+                await circuit_breaker_registry.record_failure(model)
+        except Exception as exc:
+            await circuit_breaker_registry.record_failure(model)
+            if isinstance(exc, httpx.TimeoutException):
+                raise LLMTimeoutError(f"Request to Groq timed out: {exc}")
             raise LLMProviderUnavailableError(f"HTTP Request to Groq failed: {exc}")
 
         latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -173,6 +196,10 @@ class GroqProvider(BaseLLMProvider):
         if not api_key:
             raise LLMAuthenticationError("API Key is required but was not provided.")
 
+        from app.ai_system.utils.circuit_breaker import circuit_breaker_registry
+        if not await circuit_breaker_registry.allow_request(model):
+            raise LLMProviderUnavailableError(f"Circuit breaker is OPEN for model '{model}'. Skipping request.")
+
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -186,6 +213,11 @@ class GroqProvider(BaseLLMProvider):
 
         profile = kwargs.pop("profile", "execution_reduce")
 
+        # Resolve reasoning_effort/include_reasoning parameters if present
+        from app.core.config import settings
+        reasoning_effort = kwargs.pop("reasoning_effort", None)
+        include_reasoning = kwargs.pop("include_reasoning", getattr(settings, "GROQ_INCLUDE_REASONING", False))
+
         payload = {
             "model": model,
             "messages": messages,
@@ -197,10 +229,24 @@ class GroqProvider(BaseLLMProvider):
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
+        # Strip or append reasoning parameters based on model support
+        if model.startswith("openai/gpt-oss"):
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
+            payload["include_reasoning"] = include_reasoning
+        else:
+            payload.pop("reasoning_effort", None)
+            payload.pop("include_reasoning", None)
+
         client = llm_client_factory.get_client(profile)
         
         try:
             async with client.stream("POST", url, headers=headers, json=payload) as response:
+                if response.status_code == 200:
+                    await circuit_breaker_registry.record_success(model)
+                else:
+                    await circuit_breaker_registry.record_failure(model)
+
                 if response.status_code == 401:
                     raise LLMAuthenticationError("Groq stream authentication failed")
                 elif response.status_code == 429:
@@ -223,10 +269,13 @@ class GroqProvider(BaseLLMProvider):
                                 yield delta["content"]
                         except Exception:
                             continue
-        except httpx.TimeoutException as exc:
-            raise LLMTimeoutError(f"Groq stream request timed out: {exc}")
-        except httpx.RequestError as exc:
-            raise LLMProviderUnavailableError(f"Groq stream connection failed: {exc}")
+        except Exception as exc:
+            await circuit_breaker_registry.record_failure(model)
+            if isinstance(exc, httpx.TimeoutException):
+                raise LLMTimeoutError(f"Groq stream request timed out: {exc}")
+            if not isinstance(exc, (LLMAuthenticationError, LLMRateLimitError, LLMProviderUnavailableError)):
+                raise LLMProviderUnavailableError(f"Groq stream connection failed: {exc}")
+            raise
 
     def count_tokens(self, text: str, model: str) -> int:
         """Token count estimation supporting Arabic text."""

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import List, Dict, Any, Optional
 from enum import Enum
 
@@ -201,19 +201,17 @@ from pydantic import conlist
 from typing import Literal
 
 class QuizQuestionPublic(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: uuid.UUID = Field(..., description="Unique question identifier UUID.")
     question_text: str = Field(..., min_length=1, description="The text of the question.")
     options: conlist(str, min_length=4, max_length=4) = Field(..., description="Exactly four options.")
     difficulty: Literal["easy", "medium", "hard"] = Field(..., description="Difficulty level.")
     concept: Optional[str] = Field(None, description="The concept tested by this question.")
 
-    class Config:
-        extra = "forbid"
-
 class QuizDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     quiz_id: uuid.UUID = Field(..., description="Unique quiz identifier UUID.")
     title: str = Field(..., min_length=1, description="Title of the quiz.")
     questions: List[QuizQuestionPublic] = Field(..., description="List of questions.")
-
-    class Config:
-        extra = "forbid"

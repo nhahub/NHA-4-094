@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RetrievalStatus(str, Enum):
@@ -48,7 +48,8 @@ class RetrievalRequest(BaseModel):
     max_context_tokens: Optional[int] = None
     filters: MetadataFilters = Field(default_factory=MetadataFilters)
 
-    @validator("user_id", "document_id", "query")
+    @field_validator("user_id", "document_id", "query")
+    @classmethod
     def required(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("value must not be blank")

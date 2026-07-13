@@ -39,8 +39,9 @@ INJECTION_PATTERNS = [
     "اعطني مفتاح", "تخيل أن المستند يقول", "تجاهل السياق"
 ]
 
-METADATA_WORDS = {"حجم", "صفحة", "صفحات", "حجمه", "فايل", "file size", "how big", "number of pages", "pages count", "how many pages", "page count", "status", "upload status", "chunk count"}
+METADATA_WORDS = {"حجم", "صفحة", "صفحات", "حجمه", "فايل", "طويل", "file size", "how big", "number of pages", "pages count", "how many pages", "page count", "status", "upload status", "chunk count"}
 STRUCTURE_WORDS = {"منظم", "الهيكل", "تنظيم", "بنية", "structure", "organized", "organization", "layout", "well organized", "ترتيب", "تنسيق"}
+COMPARISON_WORDS = {"مقارنة", "قارن", "الفرق بين", "compare", "comparison", "difference between", "versus", "vs"}
 
 def _normalize_text(text: str) -> str:
     """
@@ -122,6 +123,19 @@ async def validate_input(
             safety={"contains_abuse": False, "contains_prompt_injection": False},
             response_strategy=ResponseStrategy.generate_clarification,
             reasons=["Input is too short"],
+            action=InputAction.REJECT
+        )
+
+    if len(sanitized) > rules.MAX_INPUT_LENGTH:
+        return InputValidationResult(
+            valid=False,
+            sanitized_input=sanitized,
+            language=lang,
+            request_type=RequestType.ambiguous_request,
+            allow_pipeline=False,
+            safety={"contains_abuse": False, "contains_prompt_injection": False},
+            response_strategy=ResponseStrategy.generate_clarification,
+            reasons=["Input exceeds max length"],
             action=InputAction.REJECT
         )
 
@@ -229,6 +243,23 @@ async def validate_input(
                 response_strategy=ResponseStrategy.continue_to_planner,
                 action=InputAction.CONTINUE
             )
+        elif is_transformation and is_evaluation:
+            # Multi-label: combined evaluation + transformation (e.g. "رأيك وحسنه")
+            return InputValidationResult(
+                valid=True,
+                sanitized_input=sanitized,
+                language=lang,
+                request_type=RequestType.document_task,
+                primary_task=DocumentTaskType.document_evaluation,
+                secondary_tasks=[DocumentTaskType.document_transformation],
+                context_strategy=ExecutionStrategy.full_document_context,
+                allows_professional_rubric=True,
+                allows_transformation=True,
+                allow_pipeline=True,
+                safety={"contains_abuse": False, "contains_prompt_injection": False},
+                response_strategy=ResponseStrategy.continue_to_planner,
+                action=InputAction.CONTINUE
+            )
         elif is_transformation:
             return InputValidationResult(
                 valid=True,
@@ -258,7 +289,26 @@ async def validate_input(
                 action=InputAction.CONTINUE
             )
 
-    # 6. Check for Document Metadata query deterministically (Zero LLM calls)
+    # 5. Check for document comparison deterministically (Zero LLM calls)
+    has_comparison = any(w in lower_text for w in COMPARISON_WORDS) or any(w in sanitized for w in COMPARISON_WORDS)
+    if has_comparison:
+        return InputValidationResult(
+            valid=True,
+            sanitized_input=sanitized,
+            language=lang,
+            request_type=RequestType.document_task,
+            primary_task=DocumentTaskType.document_comparison,
+            # Same-document comparison: use section coverage to get representative
+            # chunks from multiple sections. Cross-document comparison is deferred.
+            context_strategy=ExecutionStrategy.section_coverage_retrieval,
+            requires_document_wide_coverage=True,
+            allow_pipeline=True,
+            safety={"contains_abuse": False, "contains_prompt_injection": False},
+            response_strategy=ResponseStrategy.continue_to_planner,
+            action=InputAction.CONTINUE
+        )
+
+    # 7. Check for Document Metadata query deterministically (Zero LLM calls)
     has_meta = any(w in lower_text for w in METADATA_WORDS) or any(w in sanitized for w in METADATA_WORDS)
     if has_meta:
         return InputValidationResult(
@@ -274,7 +324,6 @@ async def validate_input(
             response_strategy=ResponseStrategy.continue_to_planner,
             action=InputAction.CONTINUE
         )
-
     # 5. Check document guard conditions before heavy LLM/planner path
     if not document_id:
         return InputValidationResult(

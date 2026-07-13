@@ -2,7 +2,7 @@ import time
 from .context_builder import ContextBuilder
 from .hybrid_search import HybridSearch
 from .query_rewriter import QueryRewriter
-from .reranker import RuleBasedReranker
+from .reranker import RuleBasedReranker, MultilingualRerankerRouter
 from .retrieval_config import DEFAULT_RETRIEVAL_CONFIG, RetrievalConfig
 from .retrieval_errors import RetrievalError
 from .schemas import RetrievalRequest, RetrievalResult, RetrievalStatus, RetrievalTrace
@@ -20,7 +20,7 @@ class DocumentRetriever:
     ):
         self.hybrid_search = hybrid_search
         self.query_rewriter = query_rewriter or QueryRewriter()
-        self.reranker = reranker or RuleBasedReranker()
+        self.reranker = reranker or MultilingualRerankerRouter()
         self.context_builder = context_builder or ContextBuilder()
         self.config = config
 
@@ -95,12 +95,21 @@ class DocumentRetriever:
                 ), start)
 
             if self.config.enable_reranker:
-                reranked = self.reranker.rerank(
-                    chunks=candidates,
-                    query_terms=rewrite.keywords,
-                    filters=rewrite.filters,
-                    limit=top_k,
-                )
+                if hasattr(self.reranker, "rerank_async"):
+                    reranked = await self.reranker.rerank_async(
+                        chunks=candidates,
+                        query=request.query,
+                        query_terms=rewrite.keywords,
+                        filters=rewrite.filters,
+                        limit=top_k,
+                    )
+                else:
+                    reranked = self.reranker.rerank(
+                        chunks=candidates,
+                        query_terms=rewrite.keywords,
+                        filters=rewrite.filters,
+                        limit=top_k,
+                    )
                 candidates = reranked.chunks
                 trace.rerank_latency_ms = reranked.latency_ms
             else:

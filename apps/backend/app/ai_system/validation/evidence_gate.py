@@ -30,11 +30,13 @@ async def validate_evidence(
 ) -> EvidenceValidationResult:
     """
     Checks if the collected chunks provide sufficient context to fulfill the user's request.
-    Applies task-specific thresholds and rules, returning structured validation results.
+
+    # Applies task-specific thresholds from rules.py (provisional — see rules.py comments).
+    Returns structured validation results for routing decisions.
     """
     retrieved_count = len(collected_chunks)
     query_lower = query.lower()
-    
+
     # Borderline case: zero chunks collected (and not metadata query)
     if retrieved_count == 0:
         return EvidenceValidationResult(
@@ -56,34 +58,32 @@ async def validate_evidence(
 
     # 1. Check for conflicting evidence
     has_conflict = False
-    conflict_keywords = ["تعارض", "تناقض", "اختلاف", "conflict", "contradict", "disagree"]
+    conflict_keywords = ["\u062a\u0639\u0627\u0631\u0636", "\u062a\u0646\u0627\u0642\u0636", "\u0627\u062e\u062a\u0644\u0627\u0641", "conflict", "contradict", "disagree"]
     if any(k in query_lower for k in conflict_keywords):
         # If we have chunks from different pages with different numbers/claims, flag it
         pages = {c.page_number for c in collected_chunks if c.page_number}
         if len(pages) > 1:
             has_conflict = True
 
-    # 2. Task-specific routing rules
+    # 2. Task-specific routing rules using calibrated thresholds from rules.py
     reason_codes = []
-    
-    # Threshold configuration (dynamically fetched from rules or default)
-    qa_threshold = getattr(rules, "GROUNDING_SIMILARITY_THRESHOLD", 0.70)
+
+    # Read task-specific thresholds (provisional — see rules.py for calibration notes)
+    qa_threshold = getattr(rules, "THRESHOLD_FACTUAL_QA", 0.70)
+    qa_specific_threshold = getattr(rules, "THRESHOLD_FACTUAL_QA_SPECIFIC", 0.75)
+    default_threshold = getattr(rules, "THRESHOLD_DEFAULT", 0.60)
 
     if primary_task == DocumentTaskType.document_factual_qa:
-        # Check if the query asks about years of experience or a specific fact
-        # e.g., "هل عندي خمس سنين خبرة؟"
-        has_specific_fact = False
-        num_match = re.search(r"\b\d+\b", query)
-        if num_match:
-            has_specific_fact = True
+        # Check if the query asks about a specific numeric fact
+        # e.g. "هل عندي خمس سنين خبرة؟"
+        has_specific_fact = bool(re.search(r"\b\d+\b", query))
 
-        # Check if top score is high enough
         if top_score < 0.55:
             evidence_status = EvidenceStatus.insufficient
             next_action = ResponseStrategy.generate_out_of_scope_response
             reason_codes.append("LOW_RELEVANCE_SCORE")
-        elif has_specific_fact and top_score < qa_threshold:
-            # Borderline relevance score on a specific factual QA
+        elif has_specific_fact and top_score < qa_specific_threshold:
+            # Borderline relevance on a specific factual QA requiring exact evidence
             evidence_status = EvidenceStatus.partial
             next_action = ResponseStrategy.generate_partial_evidence_response
             reason_codes.append("BORDERLINE_SPECIFIC_FACT")
@@ -105,15 +105,45 @@ async def validate_evidence(
             evidence_status = EvidenceStatus.sufficient
             next_action = ResponseStrategy.continue_to_executor
 
+    elif primary_task == DocumentTaskType.document_structure_analysis:
+        # Structure analysis must have REPRESENTATIVE SECTION COVERAGE, not just any chunk.
+        # Require chunks from at least 2 distinct pages to meaningfully assess structure.
+        # A single chunk cannot describe document-wide organisation.
+        distinct_pages = len({c.page_number for c in collected_chunks if c.page_number})
+        if distinct_pages < 2:
+            evidence_status = EvidenceStatus.partial
+            next_action = ResponseStrategy.generate_partial_evidence_response
+            reason_codes.append("INSUFFICIENT_SECTION_COVERAGE_FOR_STRUCTURE")
+        else:
+            evidence_status = EvidenceStatus.sufficient
+            next_action = ResponseStrategy.continue_to_executor
+
+    elif primary_task == DocumentTaskType.document_comparison:
+        # Same-document comparison: verify representative coverage across multiple sections.
+        # At least 3 distinct pages required to compare different parts meaningfully.
+        # Cross-document comparison is deferred until multi-document retrieval is implemented.
+        distinct_pages = len({c.page_number for c in collected_chunks if c.page_number})
+        if retrieved_count < 3 or distinct_pages < 2:
+            evidence_status = EvidenceStatus.partial
+            next_action = ResponseStrategy.generate_partial_evidence_response
+            reason_codes.append("INSUFFICIENT_COVERAGE_FOR_COMPARISON")
+        else:
+            evidence_status = EvidenceStatus.sufficient
+            next_action = ResponseStrategy.continue_to_executor
+
     elif primary_task in [
         DocumentTaskType.document_evaluation,
         DocumentTaskType.document_critique,
         DocumentTaskType.document_gap_analysis,
-        DocumentTaskType.document_structure_analysis
     ]:
-        # Document-wide analysis: as long as we have chunks, we can evaluate or critique it
-        evidence_status = EvidenceStatus.sufficient
-        next_action = ResponseStrategy.continue_to_executor
+        # Document-wide analysis: as long as we have multiple chunks we can evaluate
+        if retrieved_count < 2:
+            evidence_status = EvidenceStatus.partial
+            next_action = ResponseStrategy.generate_partial_evidence_response
+            reason_codes.append("SPARSE_CONTEXT_FOR_EVALUATION")
+        else:
+            evidence_status = EvidenceStatus.sufficient
+            next_action = ResponseStrategy.continue_to_executor
 
     elif primary_task in [
         DocumentTaskType.document_transformation,
@@ -121,12 +151,11 @@ async def validate_evidence(
         DocumentTaskType.document_formatting,
         DocumentTaskType.document_targeted_improvement
     ]:
-        # CV Transformation/Rewrite: if some pages are missing, we mark as partial (uses placeholders)
-        # Check if CV contains required sections: "experience", "projects", "education"
+        # CV Transformation/Rewrite: check for required CV sections
         context_text = " ".join(c.text.lower() for c in collected_chunks)
         has_experience = "experience" in context_text or "خبرة" in context_text
         has_projects = "project" in context_text or "مشروع" in context_text or "مشاريع" in context_text
-        
+
         if not has_experience or not has_projects:
             evidence_status = EvidenceStatus.partial
             next_action = ResponseStrategy.generate_partial_evidence_response
@@ -136,8 +165,8 @@ async def validate_evidence(
             next_action = ResponseStrategy.continue_to_executor
 
     else:
-        # Default fallback QA routing
-        if top_score < qa_threshold:
+        # Default fallback QA routing using default_threshold
+        if top_score < default_threshold:
             evidence_status = EvidenceStatus.insufficient
             next_action = ResponseStrategy.generate_out_of_scope_response
             reason_codes.append("LOW_DEFAULT_SUPPORT")
@@ -145,7 +174,7 @@ async def validate_evidence(
             evidence_status = EvidenceStatus.sufficient
             next_action = ResponseStrategy.continue_to_executor
 
-    # Conflicting overrides
+    # Conflicting evidence override (only when evidence is not already insufficient)
     if has_conflict and evidence_status != EvidenceStatus.insufficient:
         evidence_status = EvidenceStatus.conflicting
         next_action = ResponseStrategy.generate_conflicting_evidence_response

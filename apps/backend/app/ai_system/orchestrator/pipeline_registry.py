@@ -199,7 +199,12 @@ async def execute_common_pipeline_steps(
     session_id = getattr(request, "session_id", "sess-xyz")
     document_id = getattr(request, "document_id", None)
     lang = getattr(request, "language", "ar")
-    retrieval_result = getattr(request, "_retrieval_result", None)
+    state = getattr(request, "state", None) or getattr(request, "_pipeline_state", None)
+    retrieval_result = (
+        state.retrieval_result if state is not None
+        else getattr(request, "_retrieval_result", None)
+    )
+
 
     # 2. Retrieve relevant chunks via the RAG retrieval module.
     chunks = []
@@ -225,7 +230,11 @@ async def execute_common_pipeline_steps(
             user_id=user_id,
             request=request
         )
-        retrieval_result = getattr(request, "_retrieval_result", None)
+        retrieval_result = (
+            state.retrieval_result if state is not None
+            else getattr(request, "_retrieval_result", None)
+        )
+
         
         # 3. Check evidence sufficiency
         evidence_res = await validate_evidence(

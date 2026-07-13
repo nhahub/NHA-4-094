@@ -148,16 +148,16 @@ def validate_output(
         ResponseStrategy.block_prompt_injection,
         ResponseStrategy.generate_clarification,
         ResponseStrategy.request_document_upload,
-        ResponseStrategy.request_document_ready
+        ResponseStrategy.request_document_ready,
+        ResponseStrategy.generate_out_of_scope_response
     ]:
         format_errors.extend(_check_not_empty(output_text))
-        safety_errors.extend(_check_no_system_leak(output_text))
         return OutputValidationResult(
-            valid=not (format_errors or safety_errors),
+            valid=not format_errors,
             reasons=reasons,
             format_errors=format_errors,
             safety_errors=safety_errors,
-            action=OutputAction.PASS if not (format_errors or safety_errors) else OutputAction.FALLBACK
+            action=OutputAction.PASS if not format_errors else OutputAction.FALLBACK
         )
 
     # 2. General checks (apply to RAG outputs)

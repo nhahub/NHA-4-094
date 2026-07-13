@@ -50,7 +50,8 @@ async def verify_response(
         ResponseStrategy.block_prompt_injection,
         ResponseStrategy.generate_clarification,
         ResponseStrategy.request_document_upload,
-        ResponseStrategy.request_document_ready
+        ResponseStrategy.request_document_ready,
+        ResponseStrategy.generate_out_of_scope_response
     ]:
         mock_hallucination = HallucinationCheckResult(
             grounded=True,

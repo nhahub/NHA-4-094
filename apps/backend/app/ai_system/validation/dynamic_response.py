@@ -53,13 +53,33 @@ AMBIGUOUS_EN_RESPONSES = [
 ]
 
 OUT_OF_SCOPE_AR_RESPONSES = [
-    "لا يظهر في الملف الحالي محتوى كافٍ للإجابة عن هذا السؤال بشكل موثوق. يمكنك سؤالي عن موضوع آخر داخل المستند أو رفع ملف مرتبط بالموضوع.",
+    "لا يظهر في الملف الحالي محتوى كافى للإجابة عن هذا السؤال بشكل موثوق. يمكنك سؤالي عن موضوع آخر داخل المستند أو رفع ملف مرتبط بالموضوع.",
     "لم أجد في محتوى المستند ما يدعم إجابة واضحة عن السؤال. جرّب تحديد صفحة أو قسم معين، أو استخدم ملفًا يتناول هذا الموضوع."
 ]
 
 OUT_OF_SCOPE_EN_RESPONSES = [
     "The current document does not provide enough supporting evidence to answer this question. Please ask about another topic inside the document.",
     "I couldn't find details supporting this query in the uploaded document. Try specifying a section or upload a document covering this topic."
+]
+
+PARTIAL_EVIDENCE_AR_RESPONSES = [
+    "وجدت بعض المعلومات ذات الصلة، لكنها قد لا تغطي سؤالك بالكامل. سأجيب بناءً على ما تتوفر في الملف فقط.",
+    "المعلومات المتاحة في المستند جزئية. سأقدم إجابة مبنية على ما هو موجود، وسأشير إلى الأجزاء التي تحتاج لمزيد من السياق."
+]
+
+PARTIAL_EVIDENCE_EN_RESPONSES = [
+    "I found some relevant information but it may not fully cover your question. I will answer based on what is available in the document.",
+    "The available evidence is partial. I will provide an answer based on what the document contains and note any gaps."
+]
+
+CONFLICTING_EVIDENCE_AR_RESPONSES = [
+    "وجدت معلومات متعارضة داخل المستند حول هذا السؤال. سأعرض الوجهتين بوضوح دون ترجيح أي منهما.",
+    "يحتوي الملف على معلومات متناقضة. سأعرض المعطيات المختلفة ويمكنك تحديد الأكثر ملاءمةً لاحتياجك."
+]
+
+CONFLICTING_EVIDENCE_EN_RESPONSES = [
+    "I found conflicting information in the document regarding your question. I will present both views without taking sides.",
+    "The document contains contradictory data on this topic. I will lay out the different perspectives so you can decide which applies."
 ]
 
 NO_DOC_AR_RESPONSES = [
@@ -109,7 +129,17 @@ def compose_dynamic_response(strategy: ResponseStrategy, lang: str = "ar") -> st
         if lang == "ar":
             return OUT_OF_SCOPE_AR_RESPONSES[idx % len(OUT_OF_SCOPE_AR_RESPONSES)]
         return OUT_OF_SCOPE_EN_RESPONSES[idx % len(OUT_OF_SCOPE_EN_RESPONSES)]
-        
+
+    elif strategy == ResponseStrategy.generate_partial_evidence_response:
+        if lang == "ar":
+            return PARTIAL_EVIDENCE_AR_RESPONSES[idx % len(PARTIAL_EVIDENCE_AR_RESPONSES)]
+        return PARTIAL_EVIDENCE_EN_RESPONSES[idx % len(PARTIAL_EVIDENCE_EN_RESPONSES)]
+
+    elif strategy == ResponseStrategy.generate_conflicting_evidence_response:
+        if lang == "ar":
+            return CONFLICTING_EVIDENCE_AR_RESPONSES[idx % len(CONFLICTING_EVIDENCE_AR_RESPONSES)]
+        return CONFLICTING_EVIDENCE_EN_RESPONSES[idx % len(CONFLICTING_EVIDENCE_EN_RESPONSES)]
+
     elif strategy == ResponseStrategy.request_document_upload:
         return NO_DOC_AR_RESPONSES[0] if lang == "ar" else NO_DOC_EN_RESPONSES[0]
         

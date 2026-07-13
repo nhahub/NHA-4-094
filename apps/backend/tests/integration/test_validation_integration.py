@@ -33,8 +33,9 @@ async def test_input_validation_empty_and_long_queries_rejected(mock_doc_get, mo
     response = client.post("/api/v1/documents/00000000-0000-0000-0000-000000000123/chat", json=payload_empty)
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "invalid_input"
-    assert data["message"] == FALLBACK_MESSAGE
+    assert data["status"] == "needs_clarification"
+    from app.ai_system.validation.dynamic_response import AMBIGUOUS_AR_RESPONSES, AMBIGUOUS_EN_RESPONSES
+    assert data["message"] in (AMBIGUOUS_AR_RESPONSES + AMBIGUOUS_EN_RESPONSES)
 
     # Overly long query payload
     payload_long = {
@@ -70,10 +71,13 @@ async def test_input_validation_prompt_injection_blocked(mock_doc_get, mock_chun
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "prompt_injection"
-    assert data["message"] == FALLBACK_MESSAGE
+    from app.ai_system.validation.dynamic_response import INJECTION_EN_RESPONSES, INJECTION_AR_RESPONSES
+    assert data["message"] in (INJECTION_EN_RESPONSES + INJECTION_AR_RESPONSES)
 
 
 @pytest.mark.asyncio
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
+@patch("app.ai_system.validation.context_collector.get_document_retriever")
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
@@ -84,23 +88,52 @@ async def test_input_validation_prompt_injection_blocked(mock_doc_get, mock_chun
 @patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock)
 async def test_dynamic_confidence_and_verification_is_connected(
-    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_judge, mock_llm_gen, mock_doc, mock_chunks,
+    mock_retrieve, mock_get_retriever, mock_validate_input
 ):
     """Verifies verifier runs after Executor/LLM and propagates calculated dynamic confidence score and citations."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    from unittest.mock import MagicMock
+    from app.ai_system.retrieval.schemas import RetrievedChunk as RChunk
+
+    mock_validate_input.return_value = InputValidationResult(
+        valid=True,
+        sanitized_input="tell me about photosynthesis",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.document_factual_qa,
+        context_strategy=ExecutionStrategy.focused_retrieval,
+        requires_document_context=True,
+        allow_pipeline=True,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.continue_to_planner,
+        action=InputAction.CONTINUE,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000123",
         "user_id": "00000000-0000-0000-0000-000000000000",
         "upload_status": "ready",
         "chunk_count": 5
     }
-    from app.ai_system.retrieval.schemas import RetrievedChunk as RChunk
     mock_chunks.return_value = [{"chunk_id": "c1", "embedding": [0.1] * 1536}]
-    mock_retrieve.return_value = RetrievalResult(
+
+    _retrieval_result = RetrievalResult(
         status=RetrievalStatus.FOUND,
         confidence=0.9,
-        chunks=[RChunk(chunk_id="chunk-abc", document_id="00000000-0000-0000-0000-000000000123", user_id="u1", text="Photosynthesis is light conversion.", score=0.95)],
+        chunks=[RChunk(chunk_id="chunk-abc", document_id="00000000-0000-0000-0000-000000000123",
+                       user_id="u1", text="Photosynthesis is light conversion.", score=0.95)],
         context_text="Photosynthesis is light conversion."
     )
+    cc_retriever = MagicMock()
+    mock_get_retriever.return_value = cc_retriever
+    cc_retriever.retrieve = AsyncMock(return_value=_retrieval_result)
+    mock_retrieve.return_value = _retrieval_result
+
     mock_mem.return_value = _mock_memory_context()
 
     from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
@@ -207,6 +240,8 @@ def _mock_memory_context(**overrides):
 
 
 @pytest.mark.asyncio
+@patch("app.services.ai_orchestrator.validate_input", new_callable=AsyncMock)
+@patch("app.ai_system.validation.context_collector.get_document_retriever")
 @patch("app.ai_system.orchestrator.pipeline_registry.document_retriever.retrieve", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.document_guard.get_chunks_by_document", new_callable=AsyncMock)
 @patch("app.db.repositories.document_repository.get_by_id")
@@ -216,23 +251,52 @@ def _mock_memory_context(**overrides):
 @patch("app.ai_system.orchestrator.pipeline_registry.summarizer.summarize_session", new_callable=AsyncMock)
 @patch("app.ai_system.orchestrator.pipeline_registry.memory_retriever.get_memory_context", new_callable=AsyncMock)
 async def test_verifier_verify_response_spy_is_called(
-    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_gen, mock_doc, mock_chunks, mock_retrieve
+    mock_mem, mock_summarize, mock_store_save, mock_chat_save, mock_llm_gen, mock_doc, mock_chunks,
+    mock_retrieve, mock_get_retriever, mock_validate_input
 ):
     """Proves verify_response is actually called in the real pipeline after Executor output."""
+    from app.ai_system.validation.schemas import (
+        InputValidationResult, RequestType, DocumentTaskType, ExecutionStrategy,
+        ResponseStrategy, Severity, InputAction
+    )
+    from unittest.mock import MagicMock
+    from app.ai_system.retrieval.schemas import RetrievedChunk as RChunk
+
+    mock_validate_input.return_value = InputValidationResult(
+        valid=True,
+        sanitized_input="tell me about photosynthesis",
+        language="ar",
+        request_type=RequestType.document_task,
+        primary_task=DocumentTaskType.document_factual_qa,
+        context_strategy=ExecutionStrategy.focused_retrieval,
+        requires_document_context=True,
+        allow_pipeline=True,
+        safety={"contains_abuse": False, "contains_prompt_injection": False},
+        response_strategy=ResponseStrategy.continue_to_planner,
+        action=InputAction.CONTINUE,
+        severity=Severity.LOW,
+        confidence=0.95
+    )
     mock_doc.return_value = {
         "id": "00000000-0000-0000-0000-000000000123",
         "user_id": "00000000-0000-0000-0000-000000000000",
         "upload_status": "ready",
         "chunk_count": 5
     }
-    from app.ai_system.retrieval.schemas import RetrievedChunk as RChunk
     mock_chunks.return_value = [{"chunk_id": "c1", "embedding": [0.1] * 1536}]
-    mock_retrieve.return_value = RetrievalResult(
+
+    _retrieval_result = RetrievalResult(
         status=RetrievalStatus.FOUND,
         confidence=0.9,
-        chunks=[RChunk(chunk_id="chunk-abc", document_id="00000000-0000-0000-0000-000000000123", user_id="u1", text="Photosynthesis is light conversion.", score=0.95)],
+        chunks=[RChunk(chunk_id="chunk-abc", document_id="00000000-0000-0000-0000-000000000123",
+                       user_id="u1", text="Photosynthesis is light conversion.", score=0.95)],
         context_text="Photosynthesis is light conversion."
     )
+    cc_retriever = MagicMock()
+    mock_get_retriever.return_value = cc_retriever
+    cc_retriever.retrieve = AsyncMock(return_value=_retrieval_result)
+    mock_retrieve.return_value = _retrieval_result
+
     mock_mem.return_value = _mock_memory_context()
 
     from app.ai_system.services.llm.schemas import LLMResponsePayload, LLMUsageMetrics
@@ -257,7 +321,7 @@ async def test_verifier_verify_response_spy_is_called(
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
-        
+
         # Verify the spy was called with proper parameters
         assert spy_verify.called
         call_args = spy_verify.call_args[1]
