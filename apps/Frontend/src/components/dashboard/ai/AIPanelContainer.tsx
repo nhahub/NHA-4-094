@@ -25,13 +25,15 @@ const detectLanguage = (text: string): "ar" | "en" => {
 interface AIPanelContainerProps {
   user: User;
   activePageId?: string;
+  activePageTitle?: string;
   activePageContent?: string;
-  onUpdatePage?: (id: string, updates: { content: string }) => void;
+  onUpdatePage?: (id: string, updates: { content?: string; title?: string }) => void;
 }
 
 export const AIPanelContainer: React.FC<AIPanelContainerProps> = ({ 
   user,
   activePageId,
+  activePageTitle,
   activePageContent,
   onUpdatePage,
 }) => {
@@ -224,7 +226,9 @@ export const AIPanelContainer: React.FC<AIPanelContainerProps> = ({
           sessionId={sessionId || "summary-session"}
           disabled={!isReady}
           activePageId={activePageId}
+          activePageTitle={activePageTitle}
           activePageContent={activePageContent}
+          documentName={activeDocument?.original_filename}
           onUpdatePage={onUpdatePage}
         />
       )}

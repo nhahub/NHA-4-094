@@ -5,15 +5,17 @@ import { User } from '@supabase/supabase-js';
 interface AIPanelProps {
   user: User;
   activePageId?: string;
+  activePageTitle?: string;
   activePageContent?: string;
-  onUpdatePage?: (id: string, updates: { content: string }) => void;
+  onUpdatePage?: (id: string, updates: { content?: string; title?: string }) => void;
 }
 
-const AIPanel: React.FC<AIPanelProps> = ({ user, activePageId, activePageContent, onUpdatePage }) => {
+const AIPanel: React.FC<AIPanelProps> = ({ user, activePageId, activePageTitle, activePageContent, onUpdatePage }) => {
   return (
     <AIPanelContainer 
       user={user} 
       activePageId={activePageId}
+      activePageTitle={activePageTitle}
       activePageContent={activePageContent}
       onUpdatePage={onUpdatePage}
     />

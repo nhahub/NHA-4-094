@@ -373,6 +373,7 @@ export default function DashboardContent({ user, initialView = "home" }: Dashboa
         <AIPanel 
           user={user} 
           activePageId={activePageId} 
+          activePageTitle={activePage?.title}
           activePageContent={activePage?.content}
           onUpdatePage={updatePage}
         />

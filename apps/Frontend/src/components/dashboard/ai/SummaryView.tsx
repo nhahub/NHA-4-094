@@ -14,8 +14,10 @@ interface SummaryViewProps {
   sessionId: string | null;
   disabled: boolean;
   activePageId?: string;
+  activePageTitle?: string;
   activePageContent?: string;
-  onUpdatePage?: (id: string, updates: { content: string }) => void;
+  documentName?: string;
+  onUpdatePage?: (id: string, updates: { content?: string; title?: string }) => void;
 }
 
 // Used for inserting into Tiptap (page editor)
@@ -116,7 +118,9 @@ export const SummaryView: React.FC<SummaryViewProps> = ({
   sessionId,
   disabled,
   activePageId,
+  activePageTitle,
   activePageContent,
+  documentName,
   onUpdatePage,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
@@ -166,10 +170,23 @@ export const SummaryView: React.FC<SummaryViewProps> = ({
       if (summaryRes.message) {
         const summaryHtml = markdownToHtml(summaryRes.message);
         const existingContent = activePageContent || "";
-        const separator = existingContent ? '<p></p><hr><p></p>' : '';
-        const newContent = existingContent + separator + summaryHtml;
-        onUpdatePage(activePageId, { content: newContent });
-        toast.success("Summary successfully inserted into page!");
+        const isUntitled = !activePageTitle || activePageTitle.trim() === "" || activePageTitle.toLowerCase() === "untitled";
+        const isContentEmpty = !existingContent || existingContent.replace(/<[^>]+>/g, "").trim() === "";
+
+        if (isUntitled && isContentEmpty) {
+          const cleanDocName = documentName ? documentName.replace(/\.pdf$/i, "") : "Document Summary";
+          const finalTitle = language === "ar" ? `ملخص: ${cleanDocName}` : `Summary: ${cleanDocName}`;
+          onUpdatePage(activePageId, {
+            title: finalTitle,
+            content: summaryHtml,
+          });
+          toast.success("Summary successfully inserted and page title updated!");
+        } else {
+          const separator = existingContent ? '<p></p><hr><p></p>' : '';
+          const newContent = existingContent + separator + summaryHtml;
+          onUpdatePage(activePageId, { content: newContent });
+          toast.success("Summary successfully inserted into page!");
+        }
       }
     } catch (err: any) {
       toast.error(err.message || "Failed to generate summary.");
