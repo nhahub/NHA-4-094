@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 from app.schemas.ai_schema import AIResponse
 from app.ai_system.orchestrator.document_guard import validate_document_access
 from app.ai_system.orchestrator.planner import TaskPlanner
 from app.ai_system.orchestrator.orchestrator import TaskOrchestrator
 from app.ai_system.validation.input_validator import validate_input
+
+logger = logging.getLogger(__name__)
 
 class AIOrchestratorService:
     """
@@ -36,12 +39,17 @@ class AIOrchestratorService:
         # 1. Document Guard
         from app.ai_system.streaming.stage_emitter import emit_stage_event
         from app.ai_system.streaming.stage_events import PublicAIStage, StageStatus
+        import time
 
+        total_start = time.perf_counter()
+        doc_start = time.perf_counter()
         try:
             await emit_stage_event(PublicAIStage.DOCUMENT_CHECK, StageStatus.STARTED, progress=5.0)
             await validate_document_access(document_id, user_id)
+            doc_duration = time.perf_counter() - doc_start
+            logger.info(f"[PERF] Document check passed in {doc_duration * 1000:.2f}ms")
             await emit_stage_event(PublicAIStage.DOCUMENT_CHECK, StageStatus.COMPLETED, progress=10.0)
-            trace_stages.append({"stage": "document_guard", "status": "passed"})
+            trace_stages.append({"stage": "document_guard", "status": "passed", "duration_ms": doc_duration * 1000})
         except Exception as e:
             await emit_stage_event(PublicAIStage.DOCUMENT_CHECK, StageStatus.FAILED, f"Document access denied: {e}", progress=10.0)
             trace_stages.append({"stage": "document_guard", "status": "failed", "error": str(e)})
@@ -63,11 +71,14 @@ class AIOrchestratorService:
         from app.schemas.ai_schema import ExecutionMode
         
         await emit_stage_event(PublicAIStage.INPUT_ANALYSIS, StageStatus.STARTED, progress=12.0)
+        val_start = time.perf_counter()
         validation_result = await validate_input(
             raw_text=query_text,
             document_id=document_id,
             user_id=user_id
         )
+        val_duration = time.perf_counter() - val_start
+        logger.info(f"[PERF] Input validation completed in {val_duration * 1000:.2f}ms")
         await emit_stage_event(PublicAIStage.INPUT_ANALYSIS, StageStatus.COMPLETED, progress=18.0)
         
         # Store validation result in pipeline state and raw request (for backward compat)
@@ -183,21 +194,33 @@ class AIOrchestratorService:
         # 3. Planner
         try:
             request.document_id = document_id
+            planner_start = time.perf_counter()
             plan = await self.planner.plan(request)
+            planner_duration = time.perf_counter() - planner_start
+            logger.info(f"[PERF] Planning completed in {planner_duration * 1000:.2f}ms")
             intent_val = plan.primary_intent.value if plan.primary_intent else "unknown"
             trace_stages.append({
                 "stage": "planner",
                 "intent": intent_val,
-                "confidence": plan.confidence
+                "confidence": plan.confidence,
+                "duration_ms": planner_duration * 1000
             })
         except Exception as e:
             trace_stages.append({"stage": "planner", "status": "failed", "error": str(e)})
             raise
             
+        orchestrator_start = time.perf_counter()
         response = await self.orchestrator.execute(plan, context)
+        orchestrator_duration = time.perf_counter() - orchestrator_start
+        logger.info(f"[PERF] Orchestrator execution completed in {orchestrator_duration * 1000:.2f}ms")
+        trace_stages.append({
+            "stage": "orchestrator_execution",
+            "duration_ms": orchestrator_duration * 1000
+        })
         
         # 4. Final Output Validation
         if response.status in ["success", "partial"]:
+            val_start_time = time.perf_counter()
             import json
             from app.ai_system.validation.output_validator import validate_output
             from app.ai_system.validation.schemas import TaskType as ValTaskType, HallucinationCheckResult, HallucinationAction, OutputAction, ResponseStrategy
@@ -219,14 +242,21 @@ class AIOrchestratorService:
             all_valid = True
             first_fail_res = None
             
-            strategy_val = getattr(request, "_input_validation", None).response_strategy if getattr(request, "_input_validation", None) else ResponseStrategy.continue_to_planner
-            primary_task_val = getattr(request, "_input_validation", None).primary_task if getattr(request, "_input_validation", None) else None
-
-            tasks_to_validate = response.tasks if response.tasks else []
-            if not tasks_to_validate:
-                primary_intent = plan.primary_intent.value if plan.primary_intent else "chat_answer"
-                val_task_type = intent_map.get(primary_intent, ValTaskType.CHAT)
+            # Extract validation requirements from plan or input validation result
+            strategy_val = ResponseStrategy.continue_to_planner
+            primary_task_val = DocumentTaskType.document_factual_qa
+            if validation_result:
+                strategy_val = validation_result.response_strategy or ResponseStrategy.continue_to_planner
+                primary_task_val = validation_result.primary_task or DocumentTaskType.document_factual_qa
+            
+            tasks_to_validate = response.tasks
+            # If parallel or sequential execution mode, validate each successfully completed task
+            if len(tasks_to_validate) == 1:
+                t = tasks_to_validate[0]
                 output_text = response.message
+                t_type_str = t.type.value if hasattr(t.type, "value") else str(t.type)
+                val_task_type = intent_map.get(t_type_str, ValTaskType.CHAT)
+                
                 quiz_data = None
                 if val_task_type == ValTaskType.QUIZ and isinstance(output_text, str):
                     try:
@@ -240,11 +270,27 @@ class AIOrchestratorService:
                         quiz_data = json.loads(cleaned.strip())
                     except Exception:
                         pass
+                
                 out_val_res = validate_output(
                     task_type=val_task_type,
                     output_text=str(output_text),
                     hallucination_result=mock_hallucination,
                     quiz_data=quiz_data,
+                    response_strategy=strategy_val,
+                    primary_task=primary_task_val,
+                    query=query_text
+                )
+                if not out_val_res.valid:
+                    all_valid = False
+                    first_fail_res = out_val_res
+            elif not tasks_to_validate:
+                # Fallback for simple chat
+                primary_intent = plan.primary_intent.value if plan.primary_intent else "chat_answer"
+                val_task_type = intent_map.get(primary_intent, ValTaskType.CHAT)
+                out_val_res = validate_output(
+                    task_type=val_task_type,
+                    output_text=str(response.message),
+                    hallucination_result=mock_hallucination,
                     response_strategy=strategy_val,
                     primary_task=primary_task_val,
                     query=query_text
@@ -286,10 +332,13 @@ class AIOrchestratorService:
                             first_fail_res = out_val_res
                             break
             
+            val_duration = time.perf_counter() - val_start_time
+            logger.info(f"[PERF] Output validation/verification completed in {val_duration * 1000:.2f}ms")
             trace_stages.append({
                 "stage": "output_validation",
                 "status": "passed" if all_valid else "failed",
-                "reasons": (first_fail_res.reasons + first_fail_res.format_errors + first_fail_res.safety_errors) if first_fail_res else []
+                "reasons": (first_fail_res.reasons + first_fail_res.format_errors + first_fail_res.safety_errors) if first_fail_res else [],
+                "duration_ms": val_duration * 1000
             })
             
             if not all_valid and first_fail_res:
@@ -310,6 +359,9 @@ class AIOrchestratorService:
                 response.metadata["personalization"] = t.metadata["personalization"]
 
         # Set trace stages in metadata
+        total_duration = time.perf_counter() - total_start
+        logger.info(f"[PERF] Total AI request execution completed in {total_duration * 1000:.2f}ms")
+        response.metadata["total_duration_ms"] = total_duration * 1000
         response.metadata["trace"] = trace_stages
         return response
 

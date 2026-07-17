@@ -98,8 +98,17 @@ class MultilingualRerankerRouter:
 
         texts = [chunk.text for chunk in chunks]
         timeout = float(settings.RERANKER_TIMEOUT_SECONDS)
+        total_budget = float(settings.RERANKER_TOTAL_BUDGET_SECONDS)
         
         for provider in provider_order:
+            elapsed = time.perf_counter() - start_time
+            remaining = total_budget - elapsed
+            if remaining <= 0.05:
+                logger.warning(f"[RERANKER ROUTER] Reranking total budget ({total_budget}s) exhausted. Skipping remaining providers.")
+                break
+                
+            current_timeout = min(timeout, remaining)
+            
             if provider in self.adapters:
                 adapter = self.adapters[provider]
                 if provider == "jina" and not settings.JINA_API_KEY.strip():
@@ -108,11 +117,11 @@ class MultilingualRerankerRouter:
                     continue
                 if provider == "cloudflare" and (not settings.CLOUDFLARE_ACCOUNT_ID.strip() or not settings.CLOUDFLARE_API_TOKEN.strip()):
                     continue
-
+ 
                 try:
-                    logger.info(f"[RERANKER ROUTER] Attempting rerank via '{provider}'...")
+                    logger.info(f"[RERANKER ROUTER] Attempting rerank via '{provider}' with timeout {current_timeout:.2f}s...")
                     adapter_start = time.perf_counter()
-                    results = await adapter.rerank(query, texts, timeout)
+                    results = await adapter.rerank(query, texts, current_timeout)
                     adapter_latency = int((time.perf_counter() - adapter_start) * 1000)
                     
                     if results:

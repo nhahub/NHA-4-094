@@ -10,7 +10,6 @@ import { DocumentControls } from "./DocumentControls";
 import { DocumentStatus } from "./DocumentStatus";
 import { ChatView } from "./ChatView";
 import { ChatComposer } from "./ChatComposer";
-import { PipelineStatus } from "./PipelineStatus";
 import { SummaryView } from "./SummaryView";
 import { QuizView } from "./QuizView";
 import { HistoryView } from "./HistoryView";

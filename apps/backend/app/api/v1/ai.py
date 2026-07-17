@@ -350,48 +350,41 @@ async def chat_with_pdf_stream(
     """
     Progressive search stream returning NDJSON progress steps.
     """
-    # Validate session binding
-    await validate_session_ownership_and_document(request.session_id, document_id, current_user_id, create_if_missing=True)
-    # 1. Ownership & Access Validation
-    try:
-        from app.ai_system.orchestrator.document_guard import validate_document_access
-        await validate_document_access(document_id, current_user_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied: {e}"
-        )
-        
     request.document_id = document_id
     request.user_id = current_user_id
-
+ 
     from fastapi.responses import StreamingResponse
     import asyncio
     from app.ai_system.streaming.stage_emitter import set_current_emitter, clear_current_emitter, emit_stage_event
     from app.ai_system.streaming.stage_events import AIStageEvent, PublicAIStage, StageStatus
-
+ 
     async def event_generator():
         req_id = str(uuid.uuid4())
         event_queue = asyncio.Queue()
-
+ 
         async def on_event(event: AIStageEvent):
             await event_queue.put(event)
-
+ 
         # Bind emitter inside ContextVar
         set_current_emitter(req_id, on_event)
-
+ 
         async def run_pipeline():
             try:
                 # 1. Emit start event
                 await emit_stage_event(PublicAIStage.REQUEST_RECEIVED, StageStatus.STARTED, progress=0.0)
-
-                # 2. Run the main query pipeline synchronously relative to this generator task
+ 
+                # Validate session binding & document access inside background task to reduce initial latency
+                await validate_session_ownership_and_document(request.session_id, document_id, current_user_id, create_if_missing=True)
+                from app.ai_system.orchestrator.document_guard import validate_document_access
+                await validate_document_access(document_id, current_user_id)
+ 
+                # 2. Run the main query pipeline
                 response = await ai_orchestrator_service.execute_query(
                     document_id=document_id,
                     request=request,
                     user_id=current_user_id
                 )
-
+ 
                 # 3. Emit final completed event containing content and citations
                 citations_list = []
                 if response.citations:
@@ -403,7 +396,7 @@ async def chat_with_pdf_stream(
                             "score": c.score
                         } for c in response.citations
                     ]
-
+ 
                 await emit_stage_event(
                     stage=PublicAIStage.COMPLETED,
                     status=StageStatus.COMPLETED,
@@ -423,9 +416,9 @@ async def chat_with_pdf_stream(
             finally:
                 # Put None to signal end of stream
                 await event_queue.put(None)
-
+ 
         task = asyncio.create_task(run_pipeline())
-
+ 
         try:
             while True:
                 event = await event_queue.get()
@@ -445,7 +438,12 @@ async def chat_with_pdf_stream(
                     await task
                 except asyncio.CancelledError:
                     pass
-
-    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+ 
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson", headers=headers)
 
 # Reload trigger comment
